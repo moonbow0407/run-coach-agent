@@ -1,0 +1,39 @@
+from datetime import datetime
+from uuid import UUID
+
+import jwt
+
+from app.common.errors import AuthenticationError
+
+
+def issue_token(
+    *,
+    user_id: UUID,
+    secret: str,
+    now: datetime,
+    expire_seconds: int,
+    algorithm: str = "HS256",
+) -> str:
+    payload = {
+        "sub": str(user_id),
+        "iat": int(now.timestamp()),
+        "exp": int(now.timestamp()) + expire_seconds,
+    }
+    return jwt.encode(payload, secret, algorithm=algorithm)
+
+
+def decode_user_id(*, token: str, secret: str, algorithm: str = "HS256") -> UUID:
+    try:
+        payload = jwt.decode(token, secret, algorithms=[algorithm])
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthenticationError("令牌已过期") from exc
+    except jwt.InvalidTokenError as exc:
+        raise AuthenticationError("令牌无效") from exc
+
+    sub = payload.get("sub")
+    if not sub:
+        raise AuthenticationError("令牌缺少 sub")
+    try:
+        return UUID(str(sub))
+    except ValueError as exc:
+        raise AuthenticationError("令牌 sub 不是合法用户 ID") from exc

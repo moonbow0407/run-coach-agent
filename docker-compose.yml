@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: run_coach
+      POSTGRES_PASSWORD: run_coach
+      POSTGRES_DB: run_coach
+    ports:
+      - "5433:5432"
+    volumes:
+      - run_coach_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U run_coach -d run_coach"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  run_coach_pg:
