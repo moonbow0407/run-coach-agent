@@ -9,6 +9,7 @@ class LifecycleEvent:
     """所有生命周期事件都携带 request_id，供 SSE 按请求隔离。"""
 
     request_id: UUID
+    trace_id: UUID
 
 
 @dataclass(frozen=True)

@@ -1,11 +1,20 @@
+import asyncio
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID
 
 import pytest
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 from app.bootstrap import create_app
@@ -13,8 +22,8 @@ from app.common.clock import FrozenClock
 from app.common.ids import new_id
 from app.infrastructure.auth.jwt import issue_token
 from app.infrastructure.config import Settings
+from app.infrastructure.database import models as _models  # noqa: F401
 from app.infrastructure.database.base import Base
-from app.infrastructure.database.models import *  # noqa: F403
 from app.infrastructure.database.models.user import UserRow
 from app.infrastructure.database.session import create_session_factory, short_session
 
@@ -22,7 +31,8 @@ TEST_DATABASE_URL = (
     "postgresql+asyncpg://run_coach:run_coach@localhost:5433/run_coach_test"
 )
 ADMIN_DATABASE_URL = "postgresql+asyncpg://run_coach:run_coach@localhost:5433/postgres"
-TEST_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc)
+TEST_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="session")
@@ -61,8 +71,9 @@ async def engine(test_settings: Settings) -> AsyncIterator[AsyncEngine]:
         test_settings.database_url, pool_pre_ping=True, poolclass=NullPool
     )
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("DROP SCHEMA public CASCADE"))
+        await conn.execute(text("CREATE SCHEMA public"))
+    await asyncio.to_thread(_upgrade_test_database, test_settings.database_url)
     try:
         yield engine
     finally:
@@ -97,7 +108,7 @@ def auth_header(user_id: UUID, test_settings: Settings) -> dict[str, str]:
 
 def token_for(user_id: UUID, settings: Settings, clock: FrozenClock | None = None) -> str:
     # JWT 校验使用墙上时钟。测试 Clock 冻结在 08:00 会导致 iat 落在未来而被拒。
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return issue_token(
         user_id=user_id,
         secret=settings.jwt_secret,
@@ -130,3 +141,11 @@ async def client_factory():
         return AsyncClient(transport=transport, base_url="http://test")
 
     return _client
+
+
+def _upgrade_test_database(database_url: str) -> None:
+    """使用正式 Alembic revision 建立集成测试数据库。"""
+    config = AlembicConfig(str(BACKEND_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    alembic_command.upgrade(config, "head")

@@ -47,6 +47,10 @@ class SimpleCapabilityExecutor:
         if handler is None:
             return Observation(source=name, status="error", error=f"未知能力: {name}")
 
+        argument_error = _validate_arguments(name=name, arguments=arguments)
+        if argument_error is not None:
+            return Observation(source=name, status="error", error=argument_error)
+
         try:
             data = await handler(arguments=arguments, context=context)
         except RunCoachError as exc:
@@ -62,7 +66,9 @@ class SimpleCapabilityExecutor:
         arguments: Mapping[str, Any],
         context: CapabilityExecutionContext,
     ) -> object:
-        days = int(arguments.get("days", 14))
+        days = arguments["days"]
+        if not isinstance(days, int) or isinstance(days, bool):
+            raise CapabilityError("get_recent_workouts.days 必须是整数")
         workouts = await self._workouts.get_recent_workouts(user_id=context.user_id, days=days)
         return workouts
 
@@ -89,3 +95,20 @@ class SimpleCapabilityExecutor:
         context: CapabilityExecutionContext,
     ) -> object:
         return await self._athlete.get_latest_athlete_state(user_id=context.user_id)
+
+
+def _validate_arguments(*, name: str, arguments: Mapping[str, Any]) -> str | None:
+    if name == "get_recent_workouts":
+        unexpected = set(arguments) - {"days"}
+        if unexpected:
+            return f"get_recent_workouts 包含未知参数: {sorted(unexpected)}"
+        days = arguments.get("days")
+        if not isinstance(days, int) or isinstance(days, bool):
+            return "get_recent_workouts.days 必须是整数"
+        if not 1 <= days <= 365:
+            return "get_recent_workouts.days 必须在 1–365 之间"
+        return None
+
+    if arguments:
+        return f"{name} 不接受参数"
+    return None

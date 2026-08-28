@@ -22,6 +22,7 @@ docker compose up -d postgres
 py -3.12 -m venv .venv
 .\.venv\Scripts\pip install -e ".[dev]"
 copy ..\.env.example .env
+# 编辑 .env，为 JWT_SECRET 填写至少 32 个字符的随机值
 alembic upgrade head
 uvicorn app.main:app --reload
 ```

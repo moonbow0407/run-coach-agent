@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -7,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from app.agent.application.chat_service import ChatService
 from app.agent.lifecycle.dispatcher import LifecycleDispatcher
-from app.agent.lifecycle.events import LifecycleEvent, TurnCommitted, TurnFailed, TurnCancelled
+from app.agent.lifecycle.events import LifecycleEvent, TurnCancelled, TurnCommitted, TurnFailed
 from app.agent.ports.conversation_reader import ConversationReader
 from app.api.dependencies.context import get_request_context
 from app.api.schemas.chat import (
@@ -26,6 +27,7 @@ from app.common.errors import (
 from app.identity.application.request_context import RequestContext
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _chat_service(request: Request) -> ChatService:
@@ -85,9 +87,56 @@ async def chat_stream(
                 content=payload.message,
             )
         )
+        queue_task: asyncio.Task[LifecycleEvent] | None = None
         try:
             while True:
-                event = await queue.get()
+                if queue.empty():
+                    queue_task = asyncio.create_task(queue.get())
+                    done, _ = await asyncio.wait(
+                        {task, queue_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if queue_task in done:
+                        event = queue_task.result()
+                        queue_task = None
+                    else:
+                        queue_task.cancel()
+                        await asyncio.gather(queue_task, return_exceptions=True)
+                        queue_task = None
+                        if not queue.empty():
+                            continue
+                        try:
+                            result = task.result()
+                        except asyncio.CancelledError:
+                            yield format_sse("run.cancelled", {})
+                        except Exception as exc:
+                            logger.error(
+                                "chat.stream.failed_without_terminal_event",
+                                exc_info=(type(exc), exc, exc.__traceback__),
+                                extra={
+                                    "request_id": str(request_context.request_id),
+                                    "trace_id": str(request_context.trace_id),
+                                    "user_id": str(request_context.user_id),
+                                },
+                            )
+                            yield format_sse("run.failed", {"error": "请求执行失败"})
+                        else:
+                            yield format_sse(
+                                "response.delta",
+                                {"content": result.content},
+                            )
+                            yield format_sse(
+                                "run.completed",
+                                {
+                                    "turn_id": str(result.turn_id),
+                                    "run_id": str(result.run_id),
+                                    "message_id": str(result.message_id),
+                                },
+                            )
+                        break
+                else:
+                    event = queue.get_nowait()
+
                 mapped = map_lifecycle_event(event)
                 if isinstance(event, TurnCommitted):
                     result = await task
@@ -98,17 +147,18 @@ async def chat_stream(
                 if isinstance(event, (TurnFailed, TurnCancelled)):
                     if mapped:
                         yield format_sse(*mapped)
-                    try:
-                        await task
-                    except (Exception, asyncio.CancelledError):
-                        pass
+                    await asyncio.gather(task, return_exceptions=True)
                     break
                 if mapped:
                     yield format_sse(*mapped)
         finally:
             dispatcher.unsubscribe(listener)
+            if queue_task is not None and not queue_task.done():
+                queue_task.cancel()
+                await asyncio.gather(queue_task, return_exceptions=True)
             if not task.done():
                 task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

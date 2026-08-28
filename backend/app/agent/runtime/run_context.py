@@ -10,5 +10,6 @@ class AgentTurnCommand:
     turn_id: UUID
     run_id: UUID
     request_id: UUID
+    trace_id: UUID
     timestamp: datetime
     current_input: str

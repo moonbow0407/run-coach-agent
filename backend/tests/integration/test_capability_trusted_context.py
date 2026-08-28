@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -48,7 +48,7 @@ async def test_capability_uses_trusted_user_id_not_arguments(
             WorkoutRow(
                 id=new_id(),
                 user_id=user_a,
-                started_at=datetime(2026, 8, 20, 6, 0, tzinfo=timezone.utc),
+                started_at=datetime(2026, 8, 20, 6, 0, tzinfo=UTC),
                 distance_m=8000,
                 duration_s=2400,
                 avg_heart_rate=140,
@@ -62,7 +62,7 @@ async def test_capability_uses_trusted_user_id_not_arguments(
             WorkoutRow(
                 id=new_id(),
                 user_id=user_b,
-                started_at=datetime(2026, 8, 21, 6, 0, tzinfo=timezone.utc),
+                started_at=datetime(2026, 8, 21, 6, 0, tzinfo=UTC),
                 distance_m=16000,
                 duration_s=4800,
                 avg_heart_rate=150,
@@ -113,3 +113,30 @@ async def test_capability_rejects_identity_in_arguments(
             arguments={"days": 14, "user_id": str(new_id())},
             context=context,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("days", [None, True, 0, 366, "14"])
+async def test_capability_returns_error_observation_for_invalid_days(
+    sessions,
+    clock: FrozenClock,
+    user_id: UUID,
+    days,
+) -> None:
+    executor = _executor(sessions, clock)
+    context = CapabilityExecutionContext(
+        user_id=user_id,
+        run_id=new_id(),
+        turn_id=new_id(),
+        request_id=new_id(),
+        timestamp=clock.now(),
+    )
+
+    observation = await executor.execute(
+        name="get_recent_workouts",
+        arguments={"days": days},
+        context=context,
+    )
+
+    assert observation.status == "error"
+    assert observation.error is not None

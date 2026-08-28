@@ -27,19 +27,11 @@ class CommittedTurn:
 class ConversationStore(Protocol):
     """Conversation 生命周期的事务边界。每个方法都是一次短事务。"""
 
-    async def get_or_create_thread(
-        self,
-        *,
-        user_id: UUID,
-        thread_id: UUID | None,
-    ) -> Thread:
-        ...
-
     async def start_turn(
         self,
         *,
         user_id: UUID,
-        thread_id: UUID,
+        thread_id: UUID | None,
         content: str,
     ) -> StartedTurn:
         ...

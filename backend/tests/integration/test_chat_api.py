@@ -1,3 +1,4 @@
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -6,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from app.agent.models.action import FinalAction
 from app.agent.reasoning.scripted import ScriptedReasoner
 from app.common.clock import FrozenClock
+from app.common.errors import RunCoachError
 from app.common.ids import new_id
 from app.infrastructure.config import Settings
 from app.infrastructure.database.models.user import UserRow
@@ -93,17 +95,46 @@ async def test_chat_sse_emits_lifecycle_events(
     auth_header,
 ) -> None:
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="流式完成")]))
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        async with client.stream(
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+        client.stream(
             "POST",
             "/api/v1/chat/stream",
             json={"message": "hello"},
             headers=auth_header,
-        ) as response:
-            assert response.status_code == 200
-            body = (await response.aread()).decode()
+        ) as response,
+    ):
+        assert response.status_code == 200
+        body = (await response.aread()).decode()
     assert "event: run.started" in body
     assert "event: reasoning.started" in body
     assert "event: response.delta" in body
     assert "流式完成" in body
     assert "event: run.completed" in body
+
+
+@pytest.mark.asyncio
+async def test_chat_sse_finishes_when_task_fails_without_terminal_event(
+    make_app,
+    auth_header,
+    monkeypatch,
+) -> None:
+    app = make_app(reasoner=ScriptedReasoner([FinalAction(content="unused")]))
+
+    async def fail_without_event(**_kwargs):
+        raise RunCoachError("early failure")
+
+    monkeypatch.setattr(app.state.chat_service, "send_message", fail_without_event)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with asyncio.timeout(2):
+            async with client.stream(
+                "POST",
+                "/api/v1/chat/stream",
+                json={"message": "hello"},
+                headers=auth_header,
+            ) as response:
+                body = (await response.aread()).decode()
+
+    assert response.status_code == 200
+    assert "event: run.failed" in body
+    assert "请求执行失败" in body

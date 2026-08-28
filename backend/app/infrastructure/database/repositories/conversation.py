@@ -4,9 +4,9 @@ from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.models.message import Message, MessageRole
-from app.agent.models.run import AgentRun, AgentRunStatus
+from app.agent.models.run import AgentRunStatus
 from app.agent.models.thread import Thread
-from app.agent.models.turn import Turn, TurnStatus
+from app.agent.models.turn import TurnStatus
 from app.agent.ports.conversation_store import CommittedTurn, StartedTurn
 from app.common.clock import Clock
 from app.common.errors import ForbiddenError, NotFoundError
@@ -26,32 +26,11 @@ class SqlAlchemyConversationStore:
         self._sessions = sessions
         self._clock = clock
 
-    async def get_or_create_thread(
-        self,
-        *,
-        user_id: UUID,
-        thread_id: UUID | None,
-    ) -> Thread:
-        now = self._clock.now()
-        async with short_session(self._sessions, commit=True) as session:
-            if thread_id is None:
-                row = ThreadRow(id=new_id(), user_id=user_id, created_at=now, updated_at=now)
-                session.add(row)
-                await session.flush()
-                return thread_from_row(row)
-
-            row = await session.get(ThreadRow, thread_id)
-            if row is None:
-                raise NotFoundError("对话线程不存在")
-            if row.user_id != user_id:
-                raise ForbiddenError("无权访问该对话线程")
-            return thread_from_row(row)
-
     async def start_turn(
         self,
         *,
         user_id: UUID,
-        thread_id: UUID,
+        thread_id: UUID | None,
         content: str,
     ) -> StartedTurn:
         now = self._clock.now()
@@ -60,7 +39,21 @@ class SqlAlchemyConversationStore:
         run_id = new_id()
 
         async with short_session(self._sessions, commit=True) as session:
-            thread = await self._require_thread(session, user_id=user_id, thread_id=thread_id)
+            if thread_id is None:
+                thread = ThreadRow(
+                    id=new_id(),
+                    user_id=user_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(thread)
+                await session.flush()
+            else:
+                thread = await self._require_thread(
+                    session,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                )
 
             turn_row = TurnRow(
                 id=turn_id,

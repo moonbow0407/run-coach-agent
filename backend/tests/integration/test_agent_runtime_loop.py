@@ -42,6 +42,7 @@ async def test_runtime_reason_act_observe_final_and_call_id_pairing(
     assert "CapabilityCompleted" in types
     assert types[-1] == "TurnCommitted"
     assert "TurnFailed" not in types
+    assert all(event.trace_id == context.trace_id for event in events)
 
     steps = await load_run_steps(sessions, result.run_id)
     kinds = [step.kind for step in steps]

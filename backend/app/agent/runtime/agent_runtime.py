@@ -49,6 +49,7 @@ class AgentRuntime:
         await self._lifecycle.publish(
             ContextAssemblyStarted(
                 request_id=command.request_id,
+                trace_id=command.trace_id,
                 turn_id=command.turn_id,
                 run_id=command.run_id,
             )
@@ -64,6 +65,7 @@ class AgentRuntime:
         await self._lifecycle.publish(
             ContextAssembled(
                 request_id=command.request_id,
+                trace_id=command.trace_id,
                 turn_id=command.turn_id,
                 run_id=command.run_id,
             )
@@ -82,6 +84,7 @@ class AgentRuntime:
             await self._lifecycle.publish(
                 ReasoningStarted(
                     request_id=command.request_id,
+                    trace_id=command.trace_id,
                     turn_id=command.turn_id,
                     run_id=command.run_id,
                     step_index=step_index,
@@ -97,6 +100,7 @@ class AgentRuntime:
             await self._lifecycle.publish(
                 ReasoningCompleted(
                     request_id=command.request_id,
+                    trace_id=command.trace_id,
                     turn_id=command.turn_id,
                     run_id=command.run_id,
                     step_index=step_index,
@@ -123,6 +127,7 @@ class AgentRuntime:
             await self._lifecycle.publish(
                 CapabilityStarted(
                     request_id=command.request_id,
+                    trace_id=command.trace_id,
                     turn_id=command.turn_id,
                     run_id=command.run_id,
                     call_id=call_id,
@@ -151,6 +156,7 @@ class AgentRuntime:
             await self._lifecycle.publish(
                 CapabilityCompleted(
                     request_id=command.request_id,
+                    trace_id=command.trace_id,
                     turn_id=command.turn_id,
                     run_id=command.run_id,
                     call_id=call_id,
