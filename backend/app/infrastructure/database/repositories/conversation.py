@@ -1,3 +1,10 @@
+"""Conversation 仓储：Thread / Turn / Message / AgentRun 的读写实现。
+
+SqlAlchemyConversationStore 拥有 Conversation 生命周期事务（ARCHITECTURE §44）：
+start_turn 与 commit_turn 各是一次短事务，推理循环本身不持有数据库事务。
+SqlAlchemyConversationReader 只暴露已提交消息，供历史查询与上下文装配使用。
+"""
+
 from uuid import UUID
 
 from sqlalchemy import case, select
@@ -22,6 +29,8 @@ from app.infrastructure.database.session import short_session
 
 
 class SqlAlchemyConversationStore:
+    """ConversationStore 端口的 SQL 实现；写路径按短事务组织。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession], clock: Clock) -> None:
         self._sessions = sessions
         self._clock = clock
@@ -33,6 +42,7 @@ class SqlAlchemyConversationStore:
         thread_id: UUID | None,
         content: str,
     ) -> StartedTurn:
+        """事务 A：新建（或校验）Thread + Turn + 用户消息 + AgentRun，一次提交。"""
         now = self._clock.now()
         turn_id = new_id()
         message_id = new_id()
@@ -106,6 +116,7 @@ class SqlAlchemyConversationStore:
         turn_id: UUID,
         assistant_content: str,
     ) -> CommittedTurn:
+        """事务 B：写入助手消息，Turn -> committed、AgentRun -> completed。"""
         now = self._clock.now()
         assistant_id = new_id()
 
@@ -142,6 +153,7 @@ class SqlAlchemyConversationStore:
             )
 
     async def fail_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
+        """把仍处于打开状态的 Turn / AgentRun 置为 failed。"""
         await self._finish_unsuccessfully(
             user_id=user_id,
             turn_id=turn_id,
@@ -150,6 +162,7 @@ class SqlAlchemyConversationStore:
         )
 
     async def cancel_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
+        """把仍处于打开状态的 Turn / AgentRun 置为 cancelled。"""
         await self._finish_unsuccessfully(
             user_id=user_id,
             turn_id=turn_id,
@@ -237,6 +250,11 @@ class SqlAlchemyConversationReader:
         exclude_turn_id: UUID | None,
         limit: int,
     ) -> list[Message]:
+        """按时间正序返回已提交消息。
+
+        只取 Turn 状态为 committed 的消息，failed / cancelled 的 Turn
+        不会污染正常上下文；先按时间倒序取最近 limit 条再反转回正序。
+        """
         # 同一秒内 user / assistant 可能共享 created_at（测试 Clock 冻结时尤其如此）。
         # 按 Turn 开始时间 + user 先于 assistant 给出稳定的 Canonical 顺序。
         role_rank = case((MessageRow.role == MessageRole.USER.value, 0), else_=1)

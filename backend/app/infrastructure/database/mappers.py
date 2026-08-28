@@ -1,3 +1,9 @@
+"""ORM Row -> 领域对象 的映射层。
+
+数据库行结构（Row）不越过本层进入领域；
+字符串字段在这里转成领域枚举，非法值会立即抛错（fail fast）。
+"""
+
 from app.agent.models.message import Message, MessageRole
 from app.agent.models.run import AgentRun, AgentRunStatus
 from app.agent.models.thread import Thread

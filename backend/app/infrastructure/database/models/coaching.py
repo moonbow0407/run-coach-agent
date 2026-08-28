@@ -1,3 +1,9 @@
+"""coaching 逻辑域的 ORM 表：训练事实 / 目标 / 计划 / 跑者状态快照。
+
+这些表是 PostgreSQL 中的 Canonical State（Source of Truth）。
+每个用户同时最多只有一个 active 目标与 active 计划，用部分唯一索引强制。
+"""
+
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID
@@ -21,6 +27,8 @@ from app.infrastructure.database.base import Base
 
 
 class WorkoutRow(Base):
+    """一次真实训练记录（距离 / 时长 / 心率 / 类型等）。"""
+
     __tablename__ = "workouts"
     __table_args__ = (Index("ix_workouts_user_started_at", "user_id", "started_at"),)
 
@@ -37,6 +45,8 @@ class WorkoutRow(Base):
 
 
 class WorkoutFeedbackRow(Base):
+    """用户对某次训练的主观反馈（自感用力 / 疲劳 / 酸痛 / 备注），量表统一 1–10。"""
+
     __tablename__ = "workout_feedback"
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -50,6 +60,8 @@ class WorkoutFeedbackRow(Base):
 
 
 class TrainingGoalRow(Base):
+    """训练目标。部分唯一索引保证每个用户至多一个 active 目标。"""
+
     __tablename__ = "training_goals"
     __table_args__ = (
         Index(
@@ -72,6 +84,8 @@ class TrainingGoalRow(Base):
 
 
 class TrainingPlanRow(Base):
+    """版本化训练计划。部分唯一索引保证每个用户至多一个 active 计划版本。"""
+
     __tablename__ = "training_plans"
     __table_args__ = (
         Index(
@@ -93,6 +107,8 @@ class TrainingPlanRow(Base):
 
 
 class PlannedSessionRow(Base):
+    """计划内的单次课次，prescription 存结构化处方（JSONB）。"""
+
     __tablename__ = "planned_sessions"
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -104,6 +120,8 @@ class PlannedSessionRow(Base):
 
 
 class AthleteStateSnapshotRow(Base):
+    """跑者状态快照：只插入新版本，不 UPDATE 旧行；(user_id, version) 唯一。"""
+
     __tablename__ = "athlete_state_snapshots"
     __table_args__ = (UniqueConstraint("user_id", "version", name="uq_athlete_state_user_version"),)
 

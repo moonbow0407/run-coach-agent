@@ -1,3 +1,10 @@
+"""能力执行端口：AgentRuntime 通过它与领域能力解耦。
+
+Runtime 只认识本接口，不关心能力具体怎么实现；
+实现方（Phase 1 的 SimpleCapabilityExecutor、Phase 2 的 Tool Runtime）
+负责参数校验、授权与错误归一化。
+"""
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime

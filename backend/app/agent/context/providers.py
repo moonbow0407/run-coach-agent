@@ -1,3 +1,10 @@
+"""上下文数据源（Provider）：负责“上下文里每类信息从哪里取”。
+
+每个 Provider 是一个 Protocol（接口）：ContextAssembler 只依赖接口，
+不依赖具体实现。因此数据源未来更换实现（例如 Phase 4 把记忆检索从
+空实现换成真实的语义 / 情节检索）时，装配与推理代码都不需要改动。
+"""
+
 from typing import Protocol
 from uuid import UUID
 
@@ -23,11 +30,15 @@ from app.coaching.domain.plan.models import ActivePlan
 
 
 class WorkingContextProvider(Protocol):
+    """提供本次运行的热上下文：当前目标 / 生效计划 / 最新跑者状态。"""
+
     async def load(self, *, user_id: UUID) -> WorkingContext:
         ...
 
 
 class ConversationContextProvider(Protocol):
+    """提供本线程中已提交 Turn 的历史消息（排除当前 Turn）。"""
+
     async def load(
         self,
         *,
@@ -40,6 +51,8 @@ class ConversationContextProvider(Protocol):
 
 
 class MemoryContextProvider(Protocol):
+    """提供长期记忆（语义记忆 + 情节记忆）。Phase 1 实现返回空列表。"""
+
     async def load(
         self,
         *,
@@ -50,11 +63,15 @@ class MemoryContextProvider(Protocol):
 
 
 class CapabilityContextProvider(Protocol):
+    """提供可调用能力清单，供模型在推理时选择工具。"""
+
     async def load(self) -> list[CapabilityDefinition]:
         ...
 
 
 class DomainWorkingContextProvider:
+    """从 coaching 领域查询服务读取热上下文（目标 / 计划 / 状态快照）。"""
+
     def __init__(
         self,
         goal_service: GoalQueryService,
@@ -78,6 +95,8 @@ class DomainWorkingContextProvider:
 
 
 class SqlConversationContextProvider:
+    """从数据库读取已提交的历史消息，并转成只含 role / content 的视图。"""
+
     def __init__(self, reader: ConversationReader) -> None:
         self._reader = reader
 
@@ -110,6 +129,8 @@ class NullMemoryContextProvider:
         return [], []
 
 
+# Phase 1 静态能力清单：与 SimpleCapabilityExecutor 支持的能力一一对应。
+# Phase 2 将由 Tool Registry 动态生成，替换本常量与 StaticCapabilityContextProvider。
 PHASE1_CAPABILITIES: tuple[CapabilityDefinition, ...] = (
     CapabilityDefinition(
         name="get_recent_workouts",
@@ -139,8 +160,14 @@ PHASE1_CAPABILITIES: tuple[CapabilityDefinition, ...] = (
 
 
 class StaticCapabilityContextProvider:
+    """原样返回静态能力清单。"""
+
     async def load(self) -> list[CapabilityDefinition]:
         return list(PHASE1_CAPABILITIES)
+
+
+# 以下三个转换函数：领域对象 → 上下文视图。
+# 只保留 Prompt 需要的字段，避免领域模型内部结构泄漏进模型上下文。
 
 
 def _goal_view(goal: TrainingGoal) -> GoalView:

@@ -1,3 +1,5 @@
+"""健康检查接口：供容器编排与探活使用。"""
+
 from fastapi import APIRouter
 
 router = APIRouter()

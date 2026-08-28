@@ -1,3 +1,9 @@
+"""Phase 1 垂直切片 seed 数据：一个演示用户及其完整领域事实。
+
+构造的场景与 ARCHITECTURE §56 的端到端示例对应：
+间歇训练跑崩 + 主观疲劳 + 当前计划仍含高负荷课次。
+"""
+
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
@@ -16,10 +22,13 @@ from app.infrastructure.database.models.coaching import (
 from app.infrastructure.database.models.user import UserRow
 
 SLICE_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc)
+# 固定的 seed 时间基准，使测试断言与具体运行时间无关。
 
 
 @dataclass(frozen=True)
 class VerticalSliceSeed:
+    """seed 写入结果的句柄：调用方拿这些 ID 做后续断言或关联。"""
+
     user_id: UUID
     goal_id: UUID
     plan_id: UUID
@@ -37,6 +46,7 @@ async def seed_vertical_slice(
     """
     now = SLICE_NOW
     user_id = user_id or new_id()
+    # 用户 -> 目标（10 月 18 日半马，目标 1:50）
     session.add(UserRow(id=user_id, created_at=now, updated_at=now))
     await session.flush()
 
@@ -56,6 +66,7 @@ async def seed_vertical_slice(
     )
     await session.flush()
 
+    # 最近一周的训练记录：轻松跑 / 节奏跑 / 长距离 / 间歇（最后一次跑崩）。
     workouts = [
         ("easy", datetime(2026, 8, 20, 6, 0, tzinfo=timezone.utc), 8000.0, 2880, 142, 158),
         ("tempo", datetime(2026, 8, 22, 6, 0, tzinfo=timezone.utc), 10000.0, 3000, 158, 172),
@@ -82,6 +93,7 @@ async def seed_vertical_slice(
         )
     await session.flush()
 
+    # 对最后一次间歇训练的主观反馈：高用力、明显疲劳、腿部酸痛。
     session.add(
         WorkoutFeedbackRow(
             id=new_id(),
@@ -95,6 +107,7 @@ async def seed_vertical_slice(
         )
     )
 
+    # 当前生效计划（v1）与后续两节课次：轻松跑 + 节奏跑。
     plan_id = new_id()
     session.add(
         TrainingPlanRow(
@@ -130,6 +143,7 @@ async def seed_vertical_slice(
         )
     )
 
+    # 跑者状态快照（v1）：中等疲劳、恢复一般，用于验证读取路径。
     session.add(
         AthleteStateSnapshotRow(
             id=new_id(),

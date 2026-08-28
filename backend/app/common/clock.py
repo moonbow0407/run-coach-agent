@@ -1,3 +1,7 @@
+"""时钟抽象：业务时间统一从 Clock 获取。
+
+测试注入 FrozenClock，避免断言依赖真实墙上时钟。"""
+
 from datetime import datetime, timezone
 from typing import Protocol
 

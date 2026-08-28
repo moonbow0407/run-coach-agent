@@ -1,3 +1,8 @@
+"""JWT 签发与校验：认证的基础设施实现。
+
+业务层只见 AuthenticationError，不感知 PyJWT 的异常类型。
+"""
+
 from datetime import datetime
 from uuid import UUID
 
@@ -14,6 +19,7 @@ def issue_token(
     expire_seconds: int,
     algorithm: str = "HS256",
 ) -> str:
+    """为指定用户签发 JWT；sub 字段即 user_id。仅供本地脚本 / 测试使用。"""
     payload = {
         "sub": str(user_id),
         "iat": int(now.timestamp()),
@@ -23,6 +29,7 @@ def issue_token(
 
 
 def decode_user_id(*, token: str, secret: str, algorithm: str = "HS256") -> UUID:
+    """校验令牌并取出 user_id；过期 / 无效 / 缺字段统一转为 AuthenticationError。"""
     try:
         payload = jwt.decode(token, secret, algorithms=[algorithm])
     except jwt.ExpiredSignatureError as exc:

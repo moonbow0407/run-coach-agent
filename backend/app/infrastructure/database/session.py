@@ -1,3 +1,9 @@
+"""异步 SQLAlchemy 引擎与短事务 session 工厂。
+
+所有仓储 / Store 共享同一个 session 工厂；每个方法内部
+各自打开 short_session（短事务），避免长事务占用连接池。
+"""
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -11,6 +17,7 @@ from sqlalchemy.pool import Pool
 
 
 def create_engine(database_url: str, *, poolclass: type[Pool] | None = None) -> AsyncEngine:
+    """创建异步引擎。pool_pre_ping 防止使用已被数据库断开的连接。"""
     kwargs: dict[str, object] = {"pool_pre_ping": True}
     if poolclass is not None:
         kwargs["poolclass"] = poolclass

@@ -1,3 +1,16 @@
+"""Agent 推理循环（Runtime）：Context → Reason → Action → Observation → … → Final。
+
+每一轮循环：
+
+    1. Reasoner 基于上下文 + 已发生的调用历史给出一个 Action；
+    2. Action 是 FinalAction    → 直接返回，由 ChatService 提交对话；
+    3. Action 是 CapabilityCall → 通过可信执行上下文调用领域能力，
+       把 Observation 记回 ReasoningState，再进入下一轮 Reason。
+
+Runtime 自己不决定“该调哪个工具”——那是 Reasoner 基于证据的职责；
+这里只提供运行保护（步数上限、取消检查）、事件发布和执行轨迹记录。
+"""
+
 import asyncio
 from time import perf_counter
 from uuid import uuid4
@@ -46,6 +59,8 @@ class AgentRuntime:
         self._max_steps = max_steps
 
     async def run(self, command: AgentTurnCommand) -> FinalAction:
+        """执行一次完整的推理循环，直到模型给出最终回答或触发保护/取消。"""
+        # 第一步：装配上下文（热上下文 + 历史对话 + 记忆 + 能力清单）。
         await self._lifecycle.publish(
             ContextAssemblyStarted(
                 request_id=command.request_id,
@@ -71,11 +86,14 @@ class AgentRuntime:
             )
         )
 
+        # 推理循环的工作状态：只存于本次 AgentRun 内存，不落库。
         state = ReasoningState()
         step_index = 0
         while True:
+            # 系统保护：防止 Reasoner 无限调用工具；这不是“最多思考几轮”的产品契约。
             if step_index >= self._max_steps:
                 raise AgentRuntimeError("超过系统运行保护步数")
+            # 让出事件循环，使取消请求有机会被投递；被取消时转为领域取消语义。
             try:
                 await asyncio.sleep(0)
             except asyncio.CancelledError as exc:
@@ -90,6 +108,7 @@ class AgentRuntime:
                     step_index=step_index,
                 )
             )
+            # 请 Reasoner 决定下一步：调用能力，还是给出最终回答。
             action = await self._reasoner.reason(
                 ReasoningContext(context_bundle=bundle, state=state)
             )
@@ -110,12 +129,15 @@ class AgentRuntime:
             step_index += 1
 
             if isinstance(action, FinalAction):
+                # 模型认为证据已足够，给出最终回答 → 交回 ChatService 提交对话。
                 await self._trace.record_final(run_id=command.run_id, action=action)
                 return action
 
             if not isinstance(action, CapabilityCallAction):
+                # 模型输出了契约之外的东西：fail fast，交由失败语义收尾。
                 raise AgentRuntimeError(f"未知 Action 类型: {type(action)!r}")
 
+            # 模型要求调用能力：call_id 用于在轨迹中把调用与观察结果配对。
             call_id = uuid4()
             await self._trace.record_action(
                 run_id=command.run_id,
@@ -135,6 +157,8 @@ class AgentRuntime:
                 )
             )
             started = perf_counter()
+            # 模型参数（arguments）与可信上下文（context）分开传入：
+            # user_id 来自命令而非模型输出，保证用户数据隔离。
             observation = await self._executor.execute(
                 name=action.capability,
                 arguments=action.arguments,
@@ -147,6 +171,7 @@ class AgentRuntime:
                 ),
             )
             duration_ms = int((perf_counter() - started) * 1000)
+            # 观察结果记回工作状态，下一轮 Reasoner 将看到它并决定是否继续调查。
             state.append(observation)
             await self._trace.record_observation(
                 run_id=command.run_id,

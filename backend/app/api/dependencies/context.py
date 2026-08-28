@@ -1,3 +1,11 @@
+"""请求鉴权依赖：在系统入口解析一次用户身份，形成可信 RequestContext。
+
+这是身份边界（ARCHITECTURE §31）的实现：
+
+    user_id 只能来自 JWT 认证，绝不从请求体、模型输出或能力参数读取。
+    解析结果沿执行链向下传播，所有数据访问都以它做用户数据隔离。
+"""
+
 from typing import Annotated
 from uuid import UUID
 
@@ -18,6 +26,10 @@ async def get_request_context(
     x_request_id: Annotated[str | None, Header()] = None,
     x_trace_id: Annotated[str | None, Header()] = None,
 ) -> RequestContext:
+    """Bearer Token → user_id → RequestContext。
+
+    request_id / trace_id 优先取请求头（便于跨服务串联），否则现场生成。
+    """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证令牌")
     token = authorization.split(" ", 1)[1].strip()
@@ -32,6 +44,7 @@ async def get_request_context(
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
+    # 令牌合法不代表账号仍存在：再查一次用户表，防止已删除用户持旧令牌访问。
     async with short_session(request.app.state.sessions) as session:
         exists = await session.scalar(select(UserRow.id).where(UserRow.id == user_id))
         if exists is None:

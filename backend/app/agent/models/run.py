@@ -1,3 +1,10 @@
+"""AgentRun 与 RunStep：一次 Agent 执行过程及其执行轨迹。
+
+AgentRun 记录“这次执行跑没跑完、结果如何”；
+RunStep 记录“每一步做了什么”（推理 / 能力调用 / 观察 / 最终回答），
+用于调试、可观测、评估与审计，不是 Runtime 的工作记忆。
+"""
+
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -21,6 +28,8 @@ class RunStepKind(StrEnum):
 
 @dataclass(frozen=True)
 class AgentRun:
+    """一次 Agent 执行。与 Turn 一一对应：Turn 是对话视角，Run 是执行视角。"""
+
     id: UUID
     turn_id: UUID
     user_id: UUID

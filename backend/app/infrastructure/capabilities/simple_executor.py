@@ -1,3 +1,10 @@
+"""SimpleCapabilityExecutor：Phase 1 的能力执行器（临时 adapter）。
+
+负责把模型给出的能力名与参数路由到对应领域查询服务，并执行安全约束：
+参数中不得出现身份字段，参数严格校验，错误归一化为 Observation。
+Phase 2 会被完整 Tool Runtime（注册 / 目录 / 搜索 / 执行）替换。
+"""
+
 from collections.abc import Mapping
 from typing import Any
 
@@ -35,6 +42,8 @@ class SimpleCapabilityExecutor:
         arguments: Mapping[str, Any],
         context: CapabilityExecutionContext,
     ) -> Observation:
+        """执行一次能力调用，返回 Observation（错误也归一化进 Observation）。"""
+        # 身份隔离：模型参数不得夹带身份字段，user_id 只来自可信 context。
         if any(key in arguments for key in _IDENTITY_KEYS):
             raise CapabilityError("Capability 参数不得包含身份字段")
 
@@ -45,8 +54,10 @@ class SimpleCapabilityExecutor:
             "get_latest_athlete_state": self._get_latest_athlete_state,
         }.get(name)
         if handler is None:
+            # 未知能力：作为可观察的错误返回给模型，让它自行调整。
             return Observation(source=name, status="error", error=f"未知能力: {name}")
 
+        # 参数不合法：同样以 Observation 回传，不中断整个 Run。
         argument_error = _validate_arguments(name=name, arguments=arguments)
         if argument_error is not None:
             return Observation(source=name, status="error", error=argument_error)
@@ -54,8 +65,10 @@ class SimpleCapabilityExecutor:
         try:
             data = await handler(arguments=arguments, context=context)
         except RunCoachError as exc:
+            # 已知业务失败归一化为错误 Observation。
             return Observation(source=name, status="error", error=str(exc))
         except Exception as exc:
+            # 未知异常属于协议/系统故障，不是模型可自行修复的错误：上抛处理。
             raise CapabilityError("能力执行失败") from exc
 
         return Observation(source=name, status="success", data=json_ready(data))
@@ -98,6 +111,7 @@ class SimpleCapabilityExecutor:
 
 
 def _validate_arguments(*, name: str, arguments: Mapping[str, Any]) -> str | None:
+    """白名单式参数校验：只允许能力声明的参数，返回错误文案或 None。"""
     if name == "get_recent_workouts":
         unexpected = set(arguments) - {"days"}
         if unexpected:

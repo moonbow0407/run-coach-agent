@@ -1,3 +1,5 @@
+"""训练记录查询服务：Agent 能力读取训练事实的领域入口。"""
+
 from datetime import timedelta
 from uuid import UUID
 
@@ -8,11 +10,15 @@ from app.common.errors import DomainError
 
 
 class WorkoutQueryService:
+    """训练记录与训练反馈的查询服务。入参校验在这里做，仓储只负责取数。"""
+
     def __init__(self, repository: WorkoutRepository, clock: Clock) -> None:
         self._repository = repository
+        # clock 用于计算“最近 N 天”的时间窗口，测试可注入固定时钟。
         self._clock = clock
 
     async def get_recent_workouts(self, *, user_id: UUID, days: int) -> list[Workout]:
+        """查询用户最近 N 天的训练记录（含上限，防止一次拉取过多）。"""
         if days <= 0:
             raise DomainError("days 必须为正整数")
         since = self._clock.now() - timedelta(days=days)

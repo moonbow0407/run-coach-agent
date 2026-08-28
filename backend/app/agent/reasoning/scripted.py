@@ -1,3 +1,9 @@
+"""测试用 Reasoner 替身：不依赖真实模型即可验证 Runtime 循环。
+
+ScriptedReasoner 按预定序列返回 Action；FailingReasoner 直接抛错，
+用于验证失败语义。
+"""
+
 from collections.abc import Sequence
 
 from app.agent.models.action import AgentAction

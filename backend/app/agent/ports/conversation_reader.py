@@ -1,3 +1,8 @@
+"""会话只读端口：查询线程与已提交消息。
+
+供 API 历史消息接口与上下文装配使用；只暴露已提交（committed）内容。
+"""
+
 from typing import Protocol
 from uuid import UUID
 

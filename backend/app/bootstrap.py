@@ -1,3 +1,19 @@
+"""应用装配层：把各层的实现对象组装成一张可运行的对象图。
+
+装配时的依赖方向（上层只认识下层接口，接口定义在各模块的 ports 中）：
+
+    API 路由
+      → ChatService            对话编排与事务边界
+        → AgentRuntime         推理循环
+          → ContextAssembler   装配上下文
+          → Reasoner           调用大模型产出 Action
+          → CapabilityExecutor 执行领域能力
+            → coaching 查询服务 → PostgreSQL 仓储
+
+本模块负责把接口与具体实现（SqlAlchemy / OpenAI 兼容 API）“接线”到一起。
+测试可以通过 build_container / create_app 的参数注入替身实现。
+"""
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -47,6 +63,8 @@ from app.infrastructure.logging import configure_logging
 
 @dataclass
 class AppContainer:
+    """进程内共享的单例对象集合，创建后挂到 FastAPI app.state 上供路由取用。"""
+
     settings: Settings
     clock: Clock
     engine: AsyncEngine
@@ -65,20 +83,27 @@ def build_container(
     clock: Clock | None = None,
     poolclass: type[Pool] | None = None,
 ) -> AppContainer:
+    """按依赖顺序构造所有对象。
+
+    reasoner / clock / poolclass 允许测试替换真实 LLM、真实时钟与真实连接池。
+    """
     clock = clock or SystemClock()
     engine = create_engine(settings.database_url, poolclass=poolclass)
     sessions = create_session_factory(engine)
     lifecycle = LifecycleDispatcher()
 
+    # 领域查询服务：Agent 能力（Capability）最终都落到这些服务上读取领域事实。
     workout_service = WorkoutQueryService(SqlAlchemyWorkoutRepository(sessions), clock)
     goal_service = GoalQueryService(SqlAlchemyGoalRepository(sessions))
     plan_service = PlanQueryService(SqlAlchemyPlanRepository(sessions))
     athlete_service = AthleteStateQueryService(SqlAlchemyAthleteStateRepository(sessions))
 
+    # 会话写 / 读 / 执行轨迹：Conversation 生命周期与 Execution Trace 的持久化实现。
     conversation_store = SqlAlchemyConversationStore(sessions, clock)
     conversation_reader = SqlAlchemyConversationReader(sessions)
     trace_recorder = SqlAlchemyAgentTraceRecorder(sessions, clock)
 
+    # 上下文装配器：决定每次推理前给模型哪些信息（热上下文 + 历史对话 + 记忆 + 能力清单）。
     assembler = ContextAssembler(
         working_context_provider=DomainWorkingContextProvider(
             goal_service, plan_service, athlete_service
@@ -88,6 +113,7 @@ def build_container(
         capability_context_provider=StaticCapabilityContextProvider(),
         history_limit=settings.conversation_history_limit,
     )
+    # Reasoner：未配置 LLM_API_KEY 时注入一个必然失败的占位实现，让错误尽早暴露而不是静默降级。
     if reasoner is None:
         if not settings.llm_api_key:
             reasoner = _MissingLLMReasoner()
@@ -103,6 +129,7 @@ def build_container(
                 PromptRenderer(),
             )
 
+    # AgentRuntime 只负责推理循环；ChatService 负责对话事务边界，二者职责严格分离。
     runtime = AgentRuntime(
         reasoner=reasoner,
         context_assembler=assembler,
@@ -128,6 +155,8 @@ def build_container(
 
 
 class _MissingLLMReasoner:
+    """未配置 LLM_API_KEY 时的占位 Reasoner：任何调用都直接报错，避免静默降级。"""
+
     async def reason(self, context: object) -> object:
         raise ReasonerError("未配置 LLM_API_KEY，无法使用 LLMReasoner")
 
@@ -139,6 +168,7 @@ def create_app(
     clock: Clock | None = None,
     poolclass: type[Pool] | None = None,
 ) -> FastAPI:
+    """FastAPI 应用工厂。lifespan 在进程退出时释放数据库连接池。"""
     configure_logging()
     settings = settings or Settings()
     container = build_container(settings, reasoner=reasoner, clock=clock, poolclass=poolclass)

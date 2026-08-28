@@ -1,3 +1,9 @@
+"""ReasoningState：当前 AgentRun 的内存工作状态。
+
+记录本轮已发生的能力调用与观察结果，供下一轮推理参考；
+生命周期只覆盖本次 AgentRun，不落库、不承担长期存储。
+"""
+
 from dataclasses import dataclass, field
 
 from app.agent.models.action import CapabilityCallAction, FinalAction

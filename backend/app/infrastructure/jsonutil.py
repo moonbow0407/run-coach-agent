@@ -1,3 +1,7 @@
+"""通用 JSON 序列化：把领域对象（dataclass / Pydantic / 枚举 / UUID 等）
+转为可写入 JSONB 或放进 Observation 的纯结构。
+"""
+
 from datetime import date, datetime
 from enum import Enum
 from typing import Any

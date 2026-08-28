@@ -1,3 +1,9 @@
+"""agent 逻辑域的 ORM 表：threads / turns / messages / agent_runs / run_steps。
+
+对应“用户真正经历了什么”与“Agent 当时如何执行”两类事实；
+与业务规则相关的约束尽量交给数据库唯一索引 / 条件索引兜底。
+"""
+
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -10,6 +16,8 @@ from app.infrastructure.database.base import Base
 
 
 class ThreadRow(Base):
+    """对话线程表。"""
+
     __tablename__ = "threads"
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -19,6 +27,8 @@ class ThreadRow(Base):
 
 
 class TurnRow(Base):
+    """一轮交互表：状态 pending/running/committed/failed/cancelled 是对话的事务边界。"""
+
     __tablename__ = "turns"
     __table_args__ = (Index("ix_turns_thread_started_at", "thread_id", "started_at"),)
 
@@ -34,6 +44,8 @@ class TurnRow(Base):
 
 
 class MessageRow(Base):
+    """消息表：只存 user / assistant 两种角色，工具调用与观察不写入本表。"""
+
     __tablename__ = "messages"
     __table_args__ = (Index("ix_messages_thread_created_at", "thread_id", "created_at"),)
 
@@ -46,6 +58,8 @@ class MessageRow(Base):
 
 
 class AgentRunRow(Base):
+    """一次 Agent 执行表：与 Turn 一一对应，记录执行视角的状态与时间。"""
+
     __tablename__ = "agent_runs"
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -57,6 +71,8 @@ class AgentRunRow(Base):
 
 
 class RunStepRow(Base):
+    """执行轨迹表：按 (run_id, index) 唯一排序记录每一步推理 / 调用 / 观察。"""
+
     __tablename__ = "run_steps"
     __table_args__ = (UniqueConstraint("run_id", "index", name="uq_run_steps_run_index"),)
 

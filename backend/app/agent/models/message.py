@@ -1,3 +1,5 @@
+"""Canonical Conversation 的消息模型。"""
+
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum

@@ -1,3 +1,5 @@
+"""用户表：Phase 1 只有主键与时间戳，认证信息由 JWT 承载。"""
+
 from datetime import datetime
 from uuid import UUID
 

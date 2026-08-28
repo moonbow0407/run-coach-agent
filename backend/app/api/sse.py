@@ -1,3 +1,10 @@
+"""SSE 适配层：把进程内 Lifecycle 事件翻译成前端可读的 SSE 事件。
+
+ChatService 与 AgentRuntime 只发布领域生命周期事件，不直接操作 HTTP；
+本模块是“事件 → 传输格式（event: xxx + data: {...}）”的唯一映射点，
+未来同一份事件还可以驱动日志、指标、评估等其它 Adapter。
+"""
+
 import json
 from collections.abc import AsyncIterator
 
@@ -14,6 +21,10 @@ from app.agent.lifecycle.events import (
 
 
 def map_lifecycle_event(event: LifecycleEvent) -> tuple[str, dict[str, object]] | None:
+    """Lifecycle 事件 → (SSE 事件名, 载荷)。
+
+    返回 None 表示该事件不需要推给前端（如 ContextAssemblyStarted）。
+    """
     if isinstance(event, TurnStarted):
         return "run.started", {
             "turn_id": str(event.turn_id),
@@ -52,6 +63,7 @@ def map_lifecycle_event(event: LifecycleEvent) -> tuple[str, dict[str, object]] 
 
 
 def format_sse(event_name: str, payload: dict[str, object]) -> str:
+    """按 SSE 协议格式化一条事件消息。"""
     return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 

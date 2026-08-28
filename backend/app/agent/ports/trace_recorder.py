@@ -1,3 +1,8 @@
+"""执行轨迹端口：把 AgentRun 的每一步持久化为 RunStep。
+
+用于调试、可观测、评估与审计。轨迹只写不读——正常推理不依赖历史轨迹。
+"""
+
 from typing import Protocol
 from uuid import UUID
 

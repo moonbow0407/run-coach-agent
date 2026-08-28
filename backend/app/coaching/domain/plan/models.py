@@ -23,6 +23,8 @@ class SessionType(StrEnum):
 
 @dataclass(frozen=True)
 class TrainingPlan:
+    """版本化的训练计划：调整必须生成新版本（Plan Version N+1），不覆盖历史。"""
+
     id: UUID
     user_id: UUID
     version: int
@@ -35,6 +37,8 @@ class TrainingPlan:
 
 @dataclass(frozen=True)
 class PlannedSession:
+    """计划中的单次训练课次；prescription 为结构化处方（距离 / 配速等）。"""
+
     id: UUID
     plan_id: UUID
     scheduled_date: date

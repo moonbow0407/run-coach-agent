@@ -1,3 +1,18 @@
+"""ChatService：一次用户交互的应用层编排器。
+
+一轮对话的完整流程（对应 ARCHITECTURE §44 的两个短事务）：
+
+    事务 A（start_turn）  创建 Thread（如首次）+ Turn + 用户消息 + AgentRun，提交
+      → 发布 TurnStarted
+    AgentRuntime.run       推理循环，期间不持有数据库事务
+      → 事务 B（commit_turn）写入助手消息，Turn / AgentRun 置为 committed
+      → 发布 TurnCommitted
+    失败 → fail_turn + TurnFailed；取消 → cancel_turn + TurnCancelled
+
+ChatService 拥有 Thread / Message / Turn / AgentRun 的生命周期；
+AgentRuntime 只负责推理循环，二者职责严格分离。
+"""
+
 import asyncio
 from dataclasses import dataclass
 from uuid import UUID
@@ -21,6 +36,8 @@ from app.identity.application.request_context import RequestContext
 
 @dataclass(frozen=True)
 class ChatResult:
+    """一轮对话的结果快照：最终回答 + 前端后续引用所需的全部 ID。"""
+
     thread_id: UUID
     turn_id: UUID
     message_id: UUID
@@ -52,6 +69,11 @@ class ChatService:
         thread_id: UUID | None,
         content: str,
     ) -> ChatResult:
+        """处理一条用户消息并返回助手回答。
+
+        全程不使用一个跨越 LLM 调用的长事务：开始与提交是两个独立短事务。
+        """
+        # 事务 A：创建 / 找到 Thread，写入 Turn、用户消息、AgentRun，状态置为 running。
         started = await self._store.start_turn(
             user_id=request_context.user_id,
             thread_id=thread_id,
@@ -70,6 +92,7 @@ class ChatService:
                     started_at=started.turn.started_at,
                 )
             )
+            # 推理循环：期间可能发生多次能力调用，全部由 Runtime 内部管理。
             final = await self._runtime.run(
                 AgentTurnCommand(
                     user_id=request_context.user_id,
@@ -82,12 +105,15 @@ class ChatService:
                     current_input=content,
                 )
             )
+            # 事务 B：写入助手消息，Turn / AgentRun 置为 committed。
             committed = await self._commit(
                 request_context=request_context,
                 started=started,
                 final=final,
             )
         except (asyncio.CancelledError, TurnCancelledError):
+            # 取消与失败语义不同：取消不是错误。Turn 置为 cancelled，
+            # 已写入的用户消息保留，但不产生助手消息，也不进入长期记忆。
             await self._store.cancel_turn(
                 user_id=request_context.user_id,
                 turn_id=started.turn.id,
@@ -104,6 +130,7 @@ class ChatService:
             )
             raise
         except Exception as exc:
+            # 统一失败语义：Turn / AgentRun 置为 failed，发布 TurnFailed。
             await self._store.fail_turn(
                 user_id=request_context.user_id,
                 turn_id=started.turn.id,
@@ -119,10 +146,13 @@ class ChatService:
                     error=str(exc),
                 )
             )
+            # 应用内已知错误原样上抛；其它异常（含基础设施细节）归一化为
+            # RunCoachError，避免向 API 层泄漏数据库连接串、堆栈等敏感信息。
             if isinstance(exc, RunCoachError):
                 raise
             raise RunCoachError("Agent 执行失败") from exc
 
+        # publish_after_commit：终态事件在状态已落库之后发布，监听方失败不影响业务结果。
         await self._lifecycle.publish_after_commit(
             TurnCommitted(
                 request_id=request_context.request_id,
@@ -151,6 +181,7 @@ class ChatService:
         started: StartedTurn,
         final: FinalAction,
     ) -> CommittedTurn:
+        """提交一轮成功对话：发布 TurnCommitStarted，然后写入助手消息并落终态。"""
         await self._lifecycle.publish(
             TurnCommitStarted(
                 request_id=request_context.request_id,

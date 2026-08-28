@@ -1,3 +1,9 @@
+"""coaching 仓储：各领域事实的 SQL 查询实现。
+
+只做取数与 Row -> 领域对象映射，不含业务规则；
+所有查询都强制携带 user_id 条件，这是用户数据隔离的最后一道防线。
+"""
+
 from datetime import datetime
 from uuid import UUID
 

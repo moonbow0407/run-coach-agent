@@ -1,3 +1,9 @@
+"""执行轨迹仓储：把 RunStep 写入 run_steps 表。
+
+每条轨迹独立短事务；index 由“当前最大值 + 1”生成，
+保证同一 AgentRun 内步骤顺序稳定（架构不使用数据库序列）。
+"""
+
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -16,6 +22,8 @@ from app.infrastructure.jsonutil import json_ready
 
 
 class SqlAlchemyAgentTraceRecorder:
+    """AgentTraceRecorder 端口的 SQL 实现。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession], clock: Clock) -> None:
         self._sessions = sessions
         self._clock = clock

@@ -1,3 +1,14 @@
+"""聊天 HTTP / SSE 接口：整个系统的传输层入口。
+
+一次请求的完整流转：
+
+    请求 → 鉴权依赖 get_request_context 解析出可信 RequestContext
+         → ChatService.send_message 编排一轮对话（建 Turn → 运行 Agent → 提交）
+         → /chat 一次性返回最终回答；/chat/stream 通过 SSE 逐步推送执行进度
+
+本层不实现业务规则，失败时只做“应用异常 → HTTP 状态码”的映射。
+"""
+
 import asyncio
 import logging
 from typing import Annotated
@@ -48,6 +59,7 @@ async def chat(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> ChatResponse:
+    """同步聊天接口：等待 Agent 完整执行后一次性返回最终回答。"""
     try:
         result = await _chat_service(request).send_message(
             request_context=request_context,
@@ -70,9 +82,16 @@ async def chat_stream(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> StreamingResponse:
+    """流式聊天接口：通过 SSE 把 Agent 执行进度实时推给前端。
+
+    实现方式：ChatService 的执行放在后台任务里跑，同时把本请求的生命周期
+    事件（推理开始 / 能力调用 / 提交 / 失败等）从进程内事件总线转发到 SSE 流。
+    事件的“生产方”（后台任务）与“消费方”（本生成器）通过 asyncio.Queue 解耦。
+    """
     queue: asyncio.Queue[LifecycleEvent] = asyncio.Queue()
 
     def listener(event: LifecycleEvent) -> None:
+        # 只接收属于当前 HTTP 请求的事件（按 request_id 过滤），避免不同请求串台。
         if event.request_id == request_context.request_id:
             queue.put_nowait(event)
 
@@ -80,6 +99,7 @@ async def chat_stream(
     dispatcher.subscribe(listener)
 
     async def generate() -> object:
+        # 后台执行一轮对话；本生成器只负责把事件转发成 SSE。
         task = asyncio.create_task(
             _chat_service(request).send_message(
                 request_context=request_context,
@@ -91,6 +111,8 @@ async def chat_stream(
         try:
             while True:
                 if queue.empty():
+                    # 队列暂时为空：同时等待“下一个事件到达”和“整个任务结束”，
+                    # 谁先完成就走谁——事件继续转发，任务结束则收尾。
                     queue_task = asyncio.create_task(queue.get())
                     done, _ = await asyncio.wait(
                         {task, queue_task},
@@ -100,11 +122,15 @@ async def chat_stream(
                         event = queue_task.result()
                         queue_task = None
                     else:
+                        # 任务先结束：取消“等待事件”的子任务，再处理任务的真实结果。
                         queue_task.cancel()
                         await asyncio.gather(queue_task, return_exceptions=True)
                         queue_task = None
+                        # 任务结束的瞬间可能刚好又有事件入队，回到循环先把事件发完。
                         if not queue.empty():
                             continue
+                        # 兜底：任务已结束但没等到终态事件（理论上不应发生）。
+                        # 仍按任务结果补发收尾 SSE，保证前端一定能收到终态。
                         try:
                             result = task.result()
                         except asyncio.CancelledError:
@@ -135,23 +161,28 @@ async def chat_stream(
                             )
                         break
                 else:
+                    # 队列里已有事件：直接取出转发，不阻塞。
                     event = queue.get_nowait()
 
                 mapped = map_lifecycle_event(event)
                 if isinstance(event, TurnCommitted):
+                    # TurnCommitted 只代表对话已提交，回答内容要等后台任务返回。
                     result = await task
                     yield format_sse("response.delta", {"content": result.content})
                     if mapped:
                         yield format_sse(*mapped)
                     break
                 if isinstance(event, (TurnFailed, TurnCancelled)):
+                    # 失败 / 取消终态已转发；等后台任务收尾（状态落库由 ChatService 完成）。
                     if mapped:
                         yield format_sse(*mapped)
                     await asyncio.gather(task, return_exceptions=True)
                     break
                 if mapped:
+                    # 中间过程事件（推理 / 能力调用）原样转发；未映射的事件忽略。
                     yield format_sse(*mapped)
         finally:
+            # 生成器结束（含客户端断开）时退订事件并取消后台任务，避免泄漏。
             dispatcher.unsubscribe(listener)
             if queue_task is not None and not queue_task.done():
                 queue_task.cancel()
@@ -169,6 +200,10 @@ async def list_messages(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> ThreadMessagesResponse:
+    """查询某个对话线程的历史消息。
+
+    只返回已提交 Turn 中的 user / assistant 消息，且线程必须属于当前用户。
+    """
     reader = _reader(request)
     thread = await reader.get_thread(user_id=request_context.user_id, thread_id=thread_id)
     if thread is None:
@@ -194,6 +229,7 @@ async def list_messages(
 
 
 def _http_error(exc: RunCoachError) -> HTTPException:
+    """把应用异常族映射为 HTTP 状态码，不向客户端泄漏内部实现细节。"""
     if isinstance(exc, AuthenticationError):
         return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     if isinstance(exc, NotFoundError):
