@@ -2,7 +2,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.agent.lifecycle.events import TurnCommitted
-from app.agent.models.action import CapabilityCallAction, FinalAction
+from app.agent.models.action import FinalAction, ToolCallAction
 from app.agent.models.turn import TurnStatus
 from app.agent.reasoning.scripted import ScriptedReasoner
 from tests.helpers import event_types, load_run_steps, load_turn, record_events
@@ -17,7 +17,11 @@ async def test_recent_training_analysis(
 ) -> None:
     reasoner = ScriptedReasoner(
         [
-            CapabilityCallAction(capability="get_recent_workouts", arguments={"days": 14}),
+            ToolCallAction(
+                tool="get_recent_workouts",
+                arguments={"days": 14},
+                model_call_id="call-recent-1",
+            ),
             FinalAction(content="最近有一次间歇和一次长跑，疲劳为中等。"),
         ]
     )
@@ -43,17 +47,17 @@ async def test_recent_training_analysis(
     committed = next(event for event in events if isinstance(event, TurnCommitted))
     steps = await load_run_steps(sessions, committed.run_id)
     kinds = [step.kind for step in steps]
-    assert "capability_call" in kinds
+    assert "tool_call" in kinds
     assert "observation" in kinds
     assert "final" in kinds
-    call = next(step for step in steps if step.kind == "capability_call")
+    call = next(step for step in steps if step.kind == "tool_call")
     observation = next(step for step in steps if step.kind == "observation")
     assert call.call_id == observation.call_id
     assert call.input_data is not None
-    assert call.input_data["capability"] == "get_recent_workouts"
+    assert call.input_data["tool"] == "get_recent_workouts"
     assert observation.output_data is not None
     assert observation.output_data["status"] == "success"
-    assert len(observation.output_data["data"]) == 4
+    assert len(observation.output_data["data"]["workouts"]) == 4
 
     bundle = reasoner.seen_contexts[0].context_bundle
     assert bundle.current_input == "我最近训练状态怎么样？"

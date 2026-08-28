@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.agent.lifecycle.events import TurnCancelled, TurnCommitted, TurnStarted
+from app.agent.lifecycle.events import TurnCancelled, TurnStarted
 from app.agent.models.action import FinalAction
 from app.agent.models.turn import TurnStatus
 from app.agent.reasoning.models import ReasoningContext

@@ -3,14 +3,16 @@
 每个 Provider 是一个 Protocol（接口）：ContextAssembler 只依赖接口，
 不依赖具体实现。因此数据源未来更换实现（例如 Phase 4 把记忆检索从
 空实现换成真实的语义 / 情节检索）时，装配与推理代码都不需要改动。
+Phase 2 起 ContextAssembler 不再管理 Tool（CapabilityContextProvider
+已删除），可见 Tool 由 Tool Runtime 的 Resolver 提供。
 """
 
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from app.agent.context.bundle import (
     AthleteStateView,
-    CapabilityDefinition,
     EpisodeView,
     GoalView,
     MemoryView,
@@ -23,22 +25,17 @@ from app.agent.context.bundle import (
 from app.agent.ports.conversation_reader import ConversationReader
 from app.coaching.application.athlete_service import AthleteStateQueryService
 from app.coaching.application.goal_service import GoalQueryService
-from app.coaching.application.plan_service import PlanQueryService
+from app.coaching.application.plan_service import ActivePlanSummary, PlanQueryService
 from app.coaching.domain.athlete.models import AthleteStateSnapshot
 from app.coaching.domain.goal.models import TrainingGoal
-from app.coaching.domain.plan.models import ActivePlan
 
 
 class WorkingContextProvider(Protocol):
-    """提供本次运行的热上下文：当前目标 / 生效计划 / 最新跑者状态。"""
-
-    async def load(self, *, user_id: UUID) -> WorkingContext:
+    async def load(self, *, user_id: UUID, as_of: datetime) -> WorkingContext:
         ...
 
 
 class ConversationContextProvider(Protocol):
-    """提供本线程中已提交 Turn 的历史消息（排除当前 Turn）。"""
-
     async def load(
         self,
         *,
@@ -51,8 +48,6 @@ class ConversationContextProvider(Protocol):
 
 
 class MemoryContextProvider(Protocol):
-    """提供长期记忆（语义记忆 + 情节记忆）。Phase 1 实现返回空列表。"""
-
     async def load(
         self,
         *,
@@ -62,16 +57,7 @@ class MemoryContextProvider(Protocol):
         ...
 
 
-class CapabilityContextProvider(Protocol):
-    """提供可调用能力清单，供模型在推理时选择工具。"""
-
-    async def load(self) -> list[CapabilityDefinition]:
-        ...
-
-
 class DomainWorkingContextProvider:
-    """从 coaching 领域查询服务读取热上下文（目标 / 计划 / 状态快照）。"""
-
     def __init__(
         self,
         goal_service: GoalQueryService,
@@ -82,9 +68,9 @@ class DomainWorkingContextProvider:
         self._plans = plan_service
         self._athlete = athlete_service
 
-    async def load(self, *, user_id: UUID) -> WorkingContext:
+    async def load(self, *, user_id: UUID, as_of: datetime) -> WorkingContext:
         goal = await self._goals.get_active_goal(user_id=user_id)
-        plan = await self._plans.get_active_plan(user_id=user_id)
+        plan = await self._plans.get_active_plan_summary(user_id=user_id, as_of=as_of)
         state = await self._athlete.get_latest_athlete_state(user_id=user_id)
         return WorkingContext(
             goal=_goal_view(goal) if goal else None,
@@ -95,8 +81,6 @@ class DomainWorkingContextProvider:
 
 
 class SqlConversationContextProvider:
-    """从数据库读取已提交的历史消息，并转成只含 role / content 的视图。"""
-
     def __init__(self, reader: ConversationReader) -> None:
         self._reader = reader
 
@@ -129,47 +113,6 @@ class NullMemoryContextProvider:
         return [], []
 
 
-# Phase 1 静态能力清单：与 SimpleCapabilityExecutor 支持的能力一一对应。
-# Phase 2 将由 Tool Registry 动态生成，替换本常量与 StaticCapabilityContextProvider。
-PHASE1_CAPABILITIES: tuple[CapabilityDefinition, ...] = (
-    CapabilityDefinition(
-        name="get_recent_workouts",
-        description="读取该用户最近若干天的训练记录。",
-        arguments_schema={
-            "type": "object",
-            "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 365}},
-            "required": ["days"],
-        },
-    ),
-    CapabilityDefinition(
-        name="get_active_goal",
-        description="读取该用户当前生效的训练目标。",
-        arguments_schema={"type": "object", "properties": {}},
-    ),
-    CapabilityDefinition(
-        name="get_active_plan",
-        description="读取该用户当前生效的训练计划及课次。",
-        arguments_schema={"type": "object", "properties": {}},
-    ),
-    CapabilityDefinition(
-        name="get_latest_athlete_state",
-        description="读取该用户最近一份 AthleteStateSnapshot。这是已有快照，不是现场计算。",
-        arguments_schema={"type": "object", "properties": {}},
-    ),
-)
-
-
-class StaticCapabilityContextProvider:
-    """原样返回静态能力清单。"""
-
-    async def load(self) -> list[CapabilityDefinition]:
-        return list(PHASE1_CAPABILITIES)
-
-
-# 以下三个转换函数：领域对象 → 上下文视图。
-# 只保留 Prompt 需要的字段，避免领域模型内部结构泄漏进模型上下文。
-
-
 def _goal_view(goal: TrainingGoal) -> GoalView:
     return GoalView(
         id=goal.id,
@@ -181,13 +124,13 @@ def _goal_view(goal: TrainingGoal) -> GoalView:
     )
 
 
-def _plan_summary(active: ActivePlan) -> PlanSummary:
+def _plan_summary(summary: ActivePlanSummary) -> PlanSummary:
     return PlanSummary(
-        id=active.plan.id,
-        version=active.plan.version,
-        starts_on=active.plan.starts_on,
-        ends_on=active.plan.ends_on,
-        status=active.plan.status.value,
+        id=summary.plan.id,
+        version=summary.plan.version,
+        starts_on=summary.plan.starts_on,
+        ends_on=summary.plan.ends_on,
+        status=summary.plan.status.value,
         sessions=tuple(
             PlannedSessionView(
                 scheduled_date=session.scheduled_date,
@@ -195,8 +138,11 @@ def _plan_summary(active: ActivePlan) -> PlanSummary:
                 title=session.title,
                 prescription=session.prescription,
             )
-            for session in active.sessions
+            for session in summary.sessions
         ),
+        window_start=summary.window_start,
+        window_end=summary.window_end,
+        truncated=summary.truncated,
     )
 
 

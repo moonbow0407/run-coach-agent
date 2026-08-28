@@ -9,7 +9,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Header, HTTPException, Request, status
 from sqlalchemy import select
 
 from app.common.errors import AuthenticationError

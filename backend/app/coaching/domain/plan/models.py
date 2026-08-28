@@ -45,11 +45,3 @@ class PlannedSession:
     session_type: SessionType
     title: str
     prescription: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class ActivePlan:
-    """当前生效计划及其课次。Phase 1 只读，不实现 Plan Adaptation。"""
-
-    plan: TrainingPlan
-    sessions: tuple[PlannedSession, ...]

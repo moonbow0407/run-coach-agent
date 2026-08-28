@@ -2,6 +2,9 @@
 
 每条轨迹独立短事务；index 由“当前最大值 + 1”生成，
 保证同一 AgentRun 内步骤顺序稳定（架构不使用数据库序列）。
+ToolCall RunStep 保存 Tool name、arguments 与 model_call_id；
+对应 Observation RunStep 通过 model_dump 携带同一 model_call_id；
+两条 RunStep 由内部 UUID call_id 关联（与模型协议 ID 不混用）。
 """
 
 from datetime import datetime
@@ -11,7 +14,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.models.action import CapabilityCallAction, FinalAction
+from app.agent.models.action import FinalAction, ToolCallAction
 from app.agent.models.observation import Observation
 from app.agent.models.run import RunStepKind
 from app.common.clock import Clock
@@ -22,8 +25,6 @@ from app.infrastructure.jsonutil import json_ready
 
 
 class SqlAlchemyAgentTraceRecorder:
-    """AgentTraceRecorder 端口的 SQL 实现。"""
-
     def __init__(self, sessions: async_sessionmaker[AsyncSession], clock: Clock) -> None:
         self._sessions = sessions
         self._clock = clock
@@ -51,15 +52,19 @@ class SqlAlchemyAgentTraceRecorder:
         *,
         run_id: UUID,
         call_id: UUID,
-        action: CapabilityCallAction,
+        action: ToolCallAction,
     ) -> None:
         now = self._clock.now()
         await self._insert(
             run_id=run_id,
-            kind=RunStepKind.CAPABILITY_CALL,
+            kind=RunStepKind.TOOL_CALL,
             call_id=call_id,
             input_data=json_ready(
-                {"capability": action.capability, "arguments": action.arguments}
+                {
+                    "tool": action.tool,
+                    "arguments": action.arguments,
+                    "model_call_id": action.model_call_id,
+                }
             ),
             output_data=None,
             started_at=now,

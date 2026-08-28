@@ -41,8 +41,12 @@ class ReasonerError(RunCoachError):
     """Reasoner 无法产出合法 Action。"""
 
 
-class CapabilityError(RunCoachError):
-    """Capability 协议或执行失败。未知能力返回 Observation.error，协议违反则抛出本异常。"""
+class ToolRuntimeError(RunCoachError):
+    """Tool Runtime 不变量破坏（Registry 状态损坏、ToolSession 与 AgentRun 不一致、无法建立可信上下文等）。
+
+    与五种可恢复的 Tool 错误 Observation（tool_not_found 等）不同：
+    本异常使 AgentRun failed，绝不伪装成 Tool 执行结果。
+    """
 
 
 class InfrastructureError(RunCoachError):

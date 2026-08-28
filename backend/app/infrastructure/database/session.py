@@ -36,7 +36,7 @@ async def short_session(
 ) -> AsyncIterator[AsyncSession]:
     """打开一次短生命周期 session。
 
-    事务不得跨越 LLM 或 Capability 执行。每个 Store / Provider / Capability
+    事务不得跨越 LLM 或 Tool 执行。每个 Store / Provider / Tool
     调用都应使用独立 short_session，而不是复用请求级长事务。
     """
     async with factory() as session:

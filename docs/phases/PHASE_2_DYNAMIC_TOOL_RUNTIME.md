@@ -1,6 +1,6 @@
 # Phase 2 — Dynamic Tool Runtime
 
-> Status: Planned
+> Status: Active
 > Depends on: `docs/ARCHITECTURE.md`
 > Previous: `docs/phases/PHASE_1_FOUNDATION_AGENT_CORE.md`
 > Scope: Tool Definition + Registry + Search + Discovery + Resolver + Executor + Native Model Tool Calling

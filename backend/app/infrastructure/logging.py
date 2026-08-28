@@ -24,7 +24,8 @@ class JsonFormatter(logging.Formatter):
             "thread_id",
             "turn_id",
             "run_id",
-            "capability",
+            "call_id",
+            "tool",
             "duration_ms",
             "status",
         ):

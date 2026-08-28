@@ -21,11 +21,13 @@ class ScriptedReasoner:
         self.seen_contexts: list[ReasoningContext] = []
 
     async def reason(self, context: ReasoningContext) -> AgentAction:
-        # 快照 interactions：Runtime 会原地追加，测试需要看到当轮调用时的状态。
+        # 快照 interactions 与可见 Tool：Runtime 会原地追加，
+        # 测试需要看到当轮调用时的状态。
         self.seen_contexts.append(
             ReasoningContext(
                 context_bundle=context.context_bundle,
                 state=ReasoningState(interactions=list(context.state.interactions)),
+                visible_tools=list(context.visible_tools),
             )
         )
         if self._index >= len(self._actions):

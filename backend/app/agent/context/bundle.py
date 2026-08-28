@@ -2,11 +2,12 @@
 
 ContextBundle 是发给 Reasoner 的完整上下文合同；各 *View 是领域对象
 在上下文中的只读投影（只含 Prompt 需要的字段，不含 ORM 与业务方法）。
+Phase 2 起 ContextBundle 不再携带任何 Tool 定义：可见 Tool 由
+ReasoningContext.visible_tools 每轮单独提供。
 """
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
 from uuid import UUID
 
 from app.agent.models.message import Message
@@ -26,17 +27,23 @@ class GoalView:
 
 @dataclass(frozen=True)
 class PlannedSessionView:
-    """计划中的单次课次：日期 + 类型 + 标题 + 结构化处方（距离 / 配速等）。"""
+    """计划课次在上下文中的视图。"""
 
     scheduled_date: date
     session_type: str
     title: str
-    prescription: dict[str, Any]
+    prescription: dict[str, object]
 
 
 @dataclass(frozen=True)
 class PlanSummary:
-    """当前生效训练计划摘要及其课次列表。"""
+    """受 Tool Result Budget 约束的计划摘要视图。
+
+    与 get_active_plan Tool 共用同一摘要语义：sessions 只覆盖
+    [window_start, window_end]（当前 ISO 周 ∪ 未来 14 天）且不超过
+    20 条；truncated 表示超出上限被显式截断。ContextBundle 不携带
+    完整长期计划。
+    """
 
     id: UUID
     version: int
@@ -44,14 +51,14 @@ class PlanSummary:
     ends_on: date
     status: str
     sessions: tuple[PlannedSessionView, ...]
+    window_start: date
+    window_end: date
+    truncated: bool
 
 
 @dataclass(frozen=True)
 class AthleteStateView:
-    """最新跑者状态快照视图。
-
-    这是系统推导状态（含版本与 as_of），不是用户口头报告的主观感受。
-    """
+    """最新跑者状态快照在上下文中的视图（已有快照，不是现场计算）。"""
 
     version: int
     as_of: datetime
@@ -65,10 +72,7 @@ class AthleteStateView:
 
 @dataclass(frozen=True)
 class WorkingContext:
-    """本次运行的热上下文：目标 + 计划 + 最新状态 + 关键约束。
-
-    不独立拥有数据、不做长期存储，只反映“现在”的高频信息。
-    """
+    """热上下文：跑者现在怎么样的当前结论。"""
 
     goal: GoalView | None
     active_plan: PlanSummary | None
@@ -78,7 +82,7 @@ class WorkingContext:
 
 @dataclass(frozen=True)
 class MessageView:
-    """历史消息视图：只保留角色、内容与时间。"""
+    """历史 committed 消息在上下文中的视图。"""
 
     role: str
     content: str
@@ -87,7 +91,7 @@ class MessageView:
 
 @dataclass(frozen=True)
 class MemoryView:
-    """语义记忆视图：用户的长期特征。Phase 1 恒为空。"""
+    """语义记忆在上下文中的视图（Phase 4 接缝，当前为空）。"""
 
     type: str
     content: str
@@ -96,7 +100,7 @@ class MemoryView:
 
 @dataclass(frozen=True)
 class EpisodeView:
-    """情节记忆视图：历史相似经历。Phase 1 恒为空。"""
+    """情节记忆在上下文中的视图（Phase 4 接缝，当前为空）。"""
 
     type: str
     summary: str
@@ -105,20 +109,11 @@ class EpisodeView:
 
 
 @dataclass(frozen=True)
-class CapabilityDefinition:
-    """一个可调用能力的描述：名称、说明与参数 JSON Schema，供模型决定是否调用。"""
-
-    name: str
-    description: str
-    arguments_schema: dict[str, Any]
-
-
-@dataclass(frozen=True)
 class ContextBundle:
     """发给 Reasoner 的完整上下文合同。
 
-    Phase 1 中 semantic/episodic memories 为空，但字段从第一版就保留，
-    以便 Phase 4 替换 MemoryContextProvider 时不改 Reasoner API。
+    semantic/episodic memories 为空但字段保留，以便 Phase 4 替换
+    MemoryContextProvider 时不改 Reasoner API。
     """
 
     system: str
@@ -126,15 +121,17 @@ class ContextBundle:
     recent_messages: list[MessageView]
     semantic_memories: list[MemoryView]
     episodic_memories: list[EpisodeView]
-    capabilities: list[CapabilityDefinition]
     current_input: str
 
 
 @dataclass(frozen=True)
 class ContextAssemblyRequest:
+    """一次上下文装配请求。timestamp 是本次请求的可信时间基准。"""
+
     user_id: UUID
     thread_id: UUID
     turn_id: UUID
+    timestamp: datetime
     current_input: str
 
 

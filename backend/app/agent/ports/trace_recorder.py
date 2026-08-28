@@ -6,7 +6,7 @@
 from typing import Protocol
 from uuid import UUID
 
-from app.agent.models.action import CapabilityCallAction, FinalAction
+from app.agent.models.action import FinalAction, ToolCallAction
 from app.agent.models.observation import Observation
 
 
@@ -25,7 +25,7 @@ class AgentTraceRecorder(Protocol):
         *,
         run_id: UUID,
         call_id: UUID,
-        action: CapabilityCallAction,
+        action: ToolCallAction,
     ) -> None:
         ...
 

@@ -1,7 +1,7 @@
 """AgentRun 与 RunStep：一次 Agent 执行过程及其执行轨迹。
 
 AgentRun 记录“这次执行跑没跑完、结果如何”；
-RunStep 记录“每一步做了什么”（推理 / 能力调用 / 观察 / 最终回答），
+RunStep 记录“每一步做了什么”（推理 / 工具调用 / 观察 / 最终回答），
 用于调试、可观测、评估与审计，不是 Runtime 的工作记忆。
 """
 
@@ -21,7 +21,7 @@ class AgentRunStatus(StrEnum):
 
 class RunStepKind(StrEnum):
     REASONING = "reasoning"
-    CAPABILITY_CALL = "capability_call"
+    TOOL_CALL = "tool_call"
     OBSERVATION = "observation"
     FINAL = "final"
 

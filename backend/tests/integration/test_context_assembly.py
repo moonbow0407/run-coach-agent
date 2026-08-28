@@ -1,4 +1,3 @@
-from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -7,7 +6,6 @@ from app.agent.lifecycle.events import TurnCommitted
 from app.agent.models.action import FinalAction
 from app.agent.reasoning.scripted import FailingReasoner, ScriptedReasoner
 from app.common.clock import FrozenClock
-from app.common.errors import ReasonerError
 from app.infrastructure.database.session import short_session
 from app.infrastructure.seed.vertical_slice import seed_vertical_slice
 from tests.conftest import token_for

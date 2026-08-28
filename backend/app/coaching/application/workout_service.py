@@ -8,6 +8,10 @@ from app.coaching.ports.workout_repository import WorkoutRepository
 from app.common.clock import Clock
 from app.common.errors import DomainError
 
+# 单次返回的训练记录硬上限：达到即视为可能截断，
+# 由调用方作为 Tool Result Budget 元数据（truncated）显式报告。
+RECENT_WORKOUTS_LIMIT = 50
+
 
 class WorkoutQueryService:
     """训练记录与训练反馈的查询服务。入参校验在这里做，仓储只负责取数。"""
@@ -22,7 +26,9 @@ class WorkoutQueryService:
         if days <= 0:
             raise DomainError("days 必须为正整数")
         since = self._clock.now() - timedelta(days=days)
-        return await self._repository.list_recent(user_id=user_id, since=since, limit=50)
+        return await self._repository.list_recent(
+            user_id=user_id, since=since, limit=RECENT_WORKOUTS_LIMIT
+        )
 
     async def get_workout(self, *, user_id: UUID, workout_id: UUID) -> Workout | None:
         return await self._repository.get(user_id=user_id, workout_id=workout_id)
