@@ -164,25 +164,22 @@ Run Coach 必须有自己的：
 
 > **Running Intelligence**
 
-所以最重要的 Domain Model 应该先出现。
-
 第一版核心实体：
 
 ```text
-Runner
 Workout
 WorkoutFeedback
 TrainingGoal
 TrainingPlan
 PlannedSession
 PlanChange
-AthleteState
+AthleteStateSnapshot
 ```
 
 关系：
 
 ```text
-Runner
+User
  │
  ├── Goal
  │
@@ -192,8 +189,12 @@ Runner
  │
  ├── TrainingPlan
  │
- └── AthleteState
+ └── AthleteStateSnapshot
 ```
+
+Phase 1 直接使用 `user_id` 表达 Coaching Data 的所有权，不提前创建没有独立业务语义的 `Runner` 实体。
+
+如果后续确实需要承载身高、体重、阈值、运动经验等跑者资料，再正式设计 `RunnerProfile`。
 
 ------
 
@@ -245,103 +246,74 @@ Goal
 
 > Canonical Domain Facts
 
+`WorkoutFeedback` 也属于 Canonical Domain Facts，但它保存的是用户报告的原始主观事实：
+
+```text
+perceived_exertion
+subjective_fatigue
+soreness
+note
+```
+
+其中 `subjective_fatigue` 不等同于 `AthleteStateSnapshot.fatigue_level`。前者是用户报告，后者是系统结合多种证据后的推导状态。
+
 ------
 
 # 6. 第二层：Athlete State
 
-这是整个 Run Coach 最值得投入的一层。
-
-它回答的不是：
+Athlete State 回答的不是：
 
 > 用户说过什么？
 
 而是：
 
-> **这个跑者现在处于什么状态？**
+> **系统根据截至某一时间的事实证据，判断这个跑者现在处于什么状态？**
 
-例如：
-
-```text
-AthleteState
-
-aerobic_fitness
-threshold_fitness
-endurance
-
-recent_training_load
-fatigue
-
-weekly_volume
-weekly_volume_tolerance
-
-workout_completion
-
-pace_hr_trend
-
-recovery
-
-confidence
-```
-
-这里不要求第一版就把所有指标做成运动科学论文。
-
-可以逐步演进。
-
-例如第一版：
+Phase 1 只固定快照的版本化、时间边界和已经能够清楚表达的基础状态语义：
 
 ```text
-AthleteState
-├── recent_load
-├── fatigue
-├── workout_completion
-├── weekly_volume
-├── pace_hr_trend
-└── confidence
+AthleteStateSnapshot
+├── version
+├── as_of
+├── fatigue_level
+├── recovery_level
+├── recent_training_load
+├── workout_completion_rate
+├── confidence
+└── algorithm_version
 ```
 
-已经够用了。
+其中 `fatigue_level` 和 `recovery_level` 是系统推导状态；`WorkoutFeedback.subjective_fatigue` 则是用户报告的原始主观事实，两者不能混用。
+
+`recent_training_load`、`workout_completion_rate` 的定义、范围、统计窗口和计算方法，以及 fitness、threshold、endurance、pace/HR trend 等扩展指标，统一留到 Phase 3 Coaching Intelligence 研究清楚后再正式设计。
+
+Phase 1 不实现或虚构任何 Athlete State 评估算法。
 
 ------
 
 # 7. Athlete State 是 Derived State
 
-它和 Workout 不同。
-
-例如：
-
-```text
-Workout
-```
-
-是真实发生过的。
+`Workout` 与 `WorkoutFeedback` 保存已经发生或由用户明确报告的事实。
 
 而：
 
 ```text
-fatigue = high
+fatigue_level = high
 ```
 
-是：
-
-> 根据最近训练和反馈推导出来的判断。
-
-所以应该：
+是系统结合多种证据得出的判断，因此必须保存为版本化快照：
 
 ```text
-Workout / Feedback
+Workout / WorkoutFeedback
         ↓
 State Evaluator
         ↓
 AthleteStateSnapshot
 ```
 
-而不是直接覆盖一行：
+不能直接覆盖用户或训练事实，也不能把主观反馈字段当作系统状态。
 
-```text
-athlete.fatigue = 0.8
-```
-
-我建议保留 Snapshot：
+Phase 1 的稳定数据语义为：
 
 ```text
 AthleteStateSnapshot
@@ -349,21 +321,23 @@ AthleteStateSnapshot
 id
 user_id
 
+version
 as_of
-source_workout_id
 
-training_load
-fatigue
-fitness
-...
+fatigue_level
+recovery_level
+
+recent_training_load
+workout_completion_rate
 
 confidence
-
-model_version
+algorithm_version
 created_at
 ```
 
-于是可以看到：
+`version` 在用户维度下单调递增，`as_of` 表示该快照使用的事实数据截止时间，`algorithm_version` 用于标识生成快照的算法版本。
+
+于是系统可以保留：
 
 ```text
 8 月 1 日
@@ -376,62 +350,53 @@ State V13
 State V14
 ```
 
-以后甚至能问：
+以后回答“为什么系统这周把我的长跑降了”时，可以回到当时的事实时间边界与状态版本。
 
-> “为什么系统这周把我的长跑降了？”
-
-直接回到当时 State。
+Phase 1 只允许读取已有快照；正式 State Evaluator、指标体系、计算窗口与算法属于 Phase 3。
 
 ------
 
-# 8. 第三层：Memory
+# 8. 第三层：Long-term Memory
 
-这里开始借鉴我们刚才分析的 Mem0 / Letta / Akasha，但不要照搬任何一家。
+这里借鉴 Mem0 / Letta / Akasha 的思想，但不照搬任何一家。
 
-Run Coach 的 Memory 我建议明确拆成：
+Run Coach 的长期 Memory 明确拆成：
 
 ```text
-Memory
-│
-├── Working Context
+Long-term Memory
 │
 ├── Semantic Memory
 │
 └── Episodic Memory
 ```
 
-注意：
+以下内容都不属于长期 Memory：
 
 ```text
-AthleteState
+AthleteStateSnapshot
+WorkingContext
 ```
 
-不属于 Memory。
-
-它属于 Domain State。
+`AthleteStateSnapshot` 属于 Coaching Domain 的 Derived State；`WorkingContext` 属于 Agent Context，是每次运行动态装配的 Hot Context。
 
 ------
 
-# 9. Working Context
+# 9. Agent Context：Working Context
 
-这部分类似 Letta 的思想：
-
-> 有些东西根本没必要每轮搜索。
-
-例如：
+有些当前信息没有必要每轮搜索，例如：
 
 ```text
 当前比赛目标
 当前训练阶段
 当前训练计划
 当前 Athlete State 摘要
-当前对话任务
+当前任务的关键约束
 ```
 
-可以组成：
+它们在一次 Agent Run 开始时动态组成：
 
 ```text
-RunnerWorkingContext
+WorkingContext
 ```
 
 例如：
@@ -451,15 +416,7 @@ Plan:
 Week 6 / 10
 ```
 
-每次 Reasoning 基本都应该有。
-
-所以：
-
-```text
-Working Context
-```
-
-是 Hot Memory / Hot State。
+`WorkingContext` 是 Agent Context 中的 Hot Context，不是一种长期 Memory Storage，也不单独承担事实所有权；其中内容仍来自 Coaching Domain 与必要的高优先级约束。
 
 ------
 
@@ -755,45 +712,101 @@ Episode:
 
 # 16. 第四层：Agent Runtime
 
-Agent Runtime 本身不要拥有业务逻辑。
-
-它应该只负责：
+系统必须明确分离三套状态：
 
 ```text
-理解当前目标
-构建 Context
-Reason
-调用 Tool
-接收 Observation
-继续 Reason
-生成 Response / Action
+Conversation State
+├── Thread
+├── Message
+└── Turn
+
+Runtime Working State
+└── ReasoningState
+
+Execution Trace
+├── AgentRun
+└── RunStep
 ```
 
-结构：
+它们分别回答：
 
 ```text
-User Input
+Conversation State
+→ 用户真正经历了什么？
+
+ReasoningState
+→ 当前 AgentRun 内 Agent 已经调用和观察了什么？
+
+Execution Trace
+→ Agent 当时实际上如何完成任务？
+```
+
+`Message` 只保存用户和助手实际形成的 Canonical Conversation。Capability Call、Observation、Reasoning、内部模型调用等执行信息不得写入 `messages`，统一由 `AgentRun / RunStep` 记录。
+
+`ReasoningState` 只存在于当前 AgentRun 生命周期，用于维护 Action / Observation 工作状态。它不保存隐藏 Chain of Thought，不属于数据库 Canonical State，AgentRuntime 也不得通过查询 `run_steps` 驱动正常 Reasoning。
+
+ChatService 是一次用户交互的 Application Orchestrator，拥有 Thread、Message、Turn、AgentRun 的 Conversation 生命周期与事务边界。
+
+AgentRuntime 不创建或提交这些对象，只负责：
+
+```text
+Context
+  ↓
+Reason
+  ↓
+Action
+  ↓
+Observation
+  ↓
+Reason
+  ↓
+Final
+```
+
+运行结构：
+
+```text
+ChatService
     ↓
-Turn Runtime
+Create Turn + AgentRun
+    ↓
+AgentRuntime
     ↓
 Context Assembler
     ↓
 Reasoner
     ↓
-Tool Runtime
+CapabilityExecutor
     ↓
 Observation
     ↓
 Reasoner
     ↓
-Response / Domain Action
+FinalAction
+    ↓
+ChatService Commit
 ```
+
+Phase 1 中 `CapabilityExecutor` 由 `SimpleCapabilityExecutor` 实现；Phase 2 再替换为正式 Tool Runtime。
+
+跨阶段必须保持以下硬约束：
+
+1. Conversation State、Runtime Working State 与 Execution Trace 必须分离。
+2. Message 只保存 user / assistant Canonical Conversation。
+3. AgentRuntime 不通过读取 RunStep 驱动正常 Reasoning。
+4. ReasoningState 只存在于当前 AgentRun 生命周期，用于维护 Action / Observation 工作状态。
+5. ChatService 拥有 Conversation 生命周期与事务边界；AgentRuntime 不提交 Turn。
+6. AgentRuntime 只负责 Context → Reason → Action → Observation → Reason → Final。
+7. 当前 User Message 只通过 `ContextBundle.current_input` 提供；`recent_messages` 只包含历史 committed Turn，且排除当前 Turn。
+8. `TurnCommitted` 必须在最终数据库事务成功之后发布。
+9. 失败或取消 Turn 可以保留 User Message，但不能形成 committed Assistant Message，也不能触发长期 Memory Projection。
+10. Phase 1 只定义 AthleteState 的稳定数据语义，不实现或虚构 Coaching Intelligence 算法。
 
 ------
 
 # 17. Context Assembler 非常重要
 
-真正发给模型的 Context 不应该：
+真正发给 Reasoner 的 Context 不应该是：
 
 ```text
 SELECT everything
@@ -806,14 +819,16 @@ ContextBundle
 │
 ├── System Instructions
 ├── Working Context
-├── Recent Conversation
+├── Historical Committed Conversation
 ├── Retrieved Semantic Memory
 ├── Retrieved Episodes
-├── Tool Schemas
+├── Capability Schemas
 └── Current User Input
 ```
 
-也就是：
+当前用户消息只能通过 `ContextBundle.current_input` 提供一次。
+
+`recent_messages` 只读取历史 committed Turn 的 user / assistant Message，并显式排除当前 Turn。失败或取消 Turn 中保留的用户消息也不能进入后续正常 Conversation Context。
 
 ```text
                   Context Assembler
@@ -826,10 +841,13 @@ Domain Context      Memory Retrieval    Conversation
         │                │                   │
         └────────────────┼───────────────────┘
                          ▼
-                       LLM
+                    ContextBundle
+                         │
+                         ▼
+                      Reasoner
 ```
 
-这是未来 Agent 智能程度非常重要的一层。
+Context Assembly 负责决定“有哪些信息”；Prompt Rendering 负责将 `ContextBundle + ReasoningState` 表达为模型请求。
 
 ------
 
@@ -1263,7 +1281,7 @@ Workout / Feedback
 
 # 27. 数据库我初步会划四个 Schema
 
-先不设计具体列，边界可以先定：
+先不设计所有具体列，边界可以先定：
 
 ```text
 PostgreSQL
@@ -1281,14 +1299,12 @@ coaching.*
 ├── plan_changes
 └── athlete_state_snapshots
 
-
 agent.*
 ├── threads
+├── messages
 ├── turns
 ├── agent_runs
-├── tool_calls
-└── events
-
+└── run_steps
 
 memory.*
 ├── semantic_memories
@@ -1297,7 +1313,9 @@ memory.*
 └── episode_evidence
 ```
 
-这是**逻辑 schema**，并不意味着必须真建四个 PostgreSQL Schema；但模块边界最好保持这个概念。
+这是逻辑 schema，并不意味着必须真建四个 PostgreSQL Schema；但模块边界必须保持这个概念。
+
+Phase 1 不单独建立 `tool_calls` 或 `events` 表。Capability Call 与 Observation 已由带 `call_id` 的 `run_steps` 表达；Phase 2 如果 Tool Runtime 确有独立持久化需求，再正式设计。
 
 ------
 
@@ -1422,11 +1440,16 @@ backend/
 # 31. 我会把整个架构浓缩成这一张图
 
 ```text
-                         ┌──────────────┐
-                         │    Runner    │
-                         └──────┬───────┘
+                              User
                                 │
-                          Text / Data
+                         Text / Data
+                                │
+                                ▼
+                         ┌─────────────┐
+                         │ ChatService │
+                         └──────┬──────┘
+                                │
+                     Turn + AgentRun created
                                 │
                                 ▼
                        ┌────────────────┐
@@ -1438,7 +1461,7 @@ backend/
         ┌──────────────────────┼──────────────────────┐
         │                      │                      │
         ▼                      ▼                      ▼
- Working Context         Memory Retrieval        Conversation
+ Working Context         Memory Retrieval    Committed Conversation
         │                      │
         │              ┌───────┴────────┐
         │              ▼                ▼
@@ -1448,20 +1471,22 @@ backend/
         ▼
  Coaching Domain
         │
-        ├── Workout
+        ├── Workout / Feedback
         ├── Goal
         ├── Training Plan
-        └── Athlete State
+        └── AthleteStateSnapshot
                                │
                                ▼
                            Reasoner
                                │
+                        ReasoningState
+                               │
                                ▼
-                         Tool Runtime
+                    CapabilityExecutor
                                │
                ┌───────────────┼──────────────┐
                ▼               ▼              ▼
-          Training Tool    State Tool      Plan Tool
+       Training Capability State Capability Plan Capability
                │               │              │
                └───────────────┼──────────────┘
                                ▼
@@ -1492,55 +1517,60 @@ backend/
 
 ```text
 1. Domain Model
-2. Conversation / Turn
-3. Minimal Agent Runtime
+2. Canonical Conversation / Turn
+3. ReasoningState + Minimal Agent Runtime
 4. Context Assembler
-5. 简单 Tool 接口
+5. CapabilityExecutor Port
 6. PostgreSQL
 ```
 
-Memory 先只留接口：
+Memory 只预留正式接缝：
 
-```python
-MemoryRetriever
-MemoryProjector
+```text
+ContextAssembler
+      ↓
+MemoryContextProvider（Phase 1 使用 Null 实现）
+
+TurnCommitted
+      ↓
+Future Memory Projectors
 ```
 
-Tool 也先只留：
+Tool System 不做弱化版 Registry，只建立：
 
-```python
-Tool
-ToolExecutor
+```text
+Phase 1
+
+CapabilityExecutor
+        ↓
+SimpleCapabilityExecutor
 ```
 
-先证明：
+Phase 2 再替换为：
+
+```text
+CapabilityExecutor
+        ↓
+Tool Runtime
+├── Tool Registry
+├── Tool Catalog
+├── Tool Search
+├── Tool Resolver
+└── Tool Executor
+```
+
+替换后 AgentRuntime、Reasoner、Context 与 Lifecycle 不需要推倒重写。
+
+Phase 1 首先证明：
 
 ```text
 用户
-→ Agent
-→ 查真实训练数据
-→ Reason
-→ 回答
+→ ChatService 创建 Turn / AgentRun
+→ AgentRuntime 查询真实训练数据
+→ Reason / Act / Observe
+→ 返回 FinalAction
+→ ChatService Commit
+→ TurnCommitted
 ```
 
-这一条 Vertical Slice 能漂亮跑通。
-
-然后下一阶段再把它升级成：
-
-```text
-Tool Registry / Search
-```
-
-再下一阶段：
-
-```text
-Semantic / Episodic Memory
-```
-
-最后：
-
-```text
-Eval
-```
-
-这就和之前确定的重构节奏完全吻合，但这次底层架构已经从“旧 Harness”思维切换成了新的认知模型。
+之后再逐阶段引入正式 Tool Runtime、Coaching Intelligence、Semantic / Episodic Memory 与 Eval。

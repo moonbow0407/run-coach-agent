@@ -1,4 +1,3 @@
-````md
 # Phase 1 — Foundation & Agent Core
 
 > Status: Active
@@ -10,35 +9,33 @@
 
 # 1. Phase Goal
 
-Phase 1 的目标不是快速做出一个聊天 Demo，而是建立 Run Coach V2 后续所有模块依赖的稳定运行骨架。
+Phase 1 的目标不是快速做出聊天 Demo，而是建立 Run Coach V2 后续所有模块依赖的稳定运行骨架。
 
 完成后，系统应具备：
 
 ```text
 HTTP Request
     ↓
-Authentication / Request Context
+Authentication / RequestContext
     ↓
-Thread / Turn / AgentRun
+ChatService
     ↓
-Context Assembly
+Transaction A:
+Thread / User Message / Turn / AgentRun
     ↓
-Reasoner
+AgentRuntime
     ↓
-Action
+ContextBundle + ReasoningState
     ↓
-Capability Execution
+Reason → Action → Capability → Observation → Reason
     ↓
-Observation
+FinalAction
     ↓
-Reasoner
-    ↓
-Final Response
-    ↓
-Persist Turn
+Transaction B:
+Assistant Message / Turn Commit / AgentRun Complete
     ↓
 TurnCommitted
-````
+```
 
 并确保未来可以在不修改 Agent Core 主流程的情况下接入：
 
@@ -46,7 +43,7 @@ TurnCommitted
 Tool Runtime
 Memory Retrieval
 Memory Projection
-Athlete State
+Athlete State Evaluator
 Eval Trace
 Async Projector
 ```
@@ -138,20 +135,14 @@ backend/
 │   │
 │   ├── coaching/
 │   │   ├── domain/
-│   │   │   ├── workout/
-│   │   │   │   └── models.py
-│   │   │   ├── goal/
-│   │   │   │   └── models.py
-│   │   │   ├── plan/
-│   │   │   │   └── models.py
-│   │   │   └── athlete/
-│   │   │       └── models.py
-│   │   │
+│   │   │   ├── workout/models.py
+│   │   │   ├── goal/models.py
+│   │   │   ├── plan/models.py
+│   │   │   └── athlete/models.py
 │   │   ├── application/
 │   │   │   ├── workout_service.py
 │   │   │   ├── goal_service.py
 │   │   │   └── plan_service.py
-│   │   │
 │   │   └── ports/
 │   │       ├── workout_repository.py
 │   │       ├── goal_repository.py
@@ -159,36 +150,32 @@ backend/
 │   │
 │   ├── agent/
 │   │   ├── models/
+│   │   │   ├── thread.py
+│   │   │   ├── message.py
 │   │   │   ├── turn.py
 │   │   │   ├── run.py
 │   │   │   ├── action.py
 │   │   │   └── observation.py
-│   │   │
 │   │   ├── runtime/
 │   │   │   ├── agent_runtime.py
 │   │   │   └── run_context.py
-│   │   │
 │   │   ├── reasoning/
 │   │   │   ├── reasoner.py
+│   │   │   ├── state.py
 │   │   │   ├── llm_reasoner.py
 │   │   │   └── models.py
-│   │   │
 │   │   ├── context/
 │   │   │   ├── assembler.py
 │   │   │   ├── bundle.py
 │   │   │   └── providers.py
-│   │   │
 │   │   ├── lifecycle/
 │   │   │   ├── events.py
-│   │   │   ├── hooks.py
 │   │   │   └── dispatcher.py
-│   │   │
 │   │   ├── ports/
-│   │   │   ├── turn_repository.py
-│   │   │   ├── run_repository.py
-│   │   │   ├── capability_executor.py
-│   │   │   └── conversation_reader.py
-│   │   │
+│   │   │   ├── conversation_store.py
+│   │   │   ├── conversation_reader.py
+│   │   │   ├── trace_recorder.py
+│   │   │   └── capability_executor.py
 │   │   └── application/
 │   │       └── chat_service.py
 │   │
@@ -212,35 +199,15 @@ backend/
 │   ├── unit/
 │   ├── integration/
 │   └── scenarios/
-│
 ├── migrations/
-│
-├── docs/
-│   ├── ARCHITECTURE.md
-│   └── phases/
-│       └── PHASE_1_FOUNDATION_AGENT_CORE.md
-│
 └── pyproject.toml
 ```
 
-Phase 1 不提前创建：
-
-```text
-memory/*
-tools/*
-evals/*
-workers/*
-```
-
-的大量空实现。
-
-顶层架构已经定义这些模块，但在真正进入对应 Phase 时再落目录。
+Phase 1 不提前创建 `memory/*`、`tools/*`、`evals/*`、`workers/*` 的空实现。顶层架构已经定义这些模块，在进入对应 Phase 时再落目录。
 
 ---
 
 # 5. Foundation
-
-## 5.1 Python Project
 
 统一使用：
 
@@ -254,9 +221,7 @@ PostgreSQL
 pytest
 ```
 
-LLM Provider 通过 Adapter 封装，不允许 Agent Core 直接依赖具体模型 SDK。
-
-例如：
+具体模型 SDK 必须封装在 LLM Provider Adapter 后：
 
 ```python
 class LLMProvider(Protocol):
@@ -267,19 +232,21 @@ class LLMProvider(Protocol):
         ...
 ```
 
-Agent Runtime 只依赖：
+依赖方向必须固定为：
 
 ```text
+AgentRuntime
+    ↓
+Reasoner
+
+LLMReasoner
+    ↓
 LLMProvider
 ```
 
-而不是：
+AgentRuntime 只依赖 `Reasoner`，不依赖也不感知 `LLMProvider`，更不需要知道底层是否使用 LLM。
 
-```text
-OpenAI Client
-Anthropic Client
-...
-```
+Scenario Test 可以直接以 `ScriptedReasoner` 或 `FakeReasoner` 替换 `LLMReasoner`。
 
 ---
 
@@ -397,7 +364,7 @@ quality_score
 
 # 9. Workout Feedback
 
-定义独立实体：
+`WorkoutFeedback` 保存用户报告的原始主观事实：
 
 ```python
 @dataclass
@@ -406,16 +373,35 @@ class WorkoutFeedback:
     user_id: UUID
     workout_id: UUID
 
-    rpe: int | None
-    fatigue: int | None
+    # 本次训练的主观用力程度，采用 1~10 量表。
+    perceived_exertion: int | None
+
+    # 用户自己报告的整体疲劳程度。
+    # 这是主观事实，不等同于 AthleteState 中系统推导的疲劳状态。
+    subjective_fatigue: int | None
+
+    # 用户自己报告的训练后肌肉酸痛程度。
     soreness: int | None
 
+    # 用户对训练感受、身体状态等情况的自然语言补充。
     note: str | None
 
     created_at: datetime
 ```
 
-主观反馈和客观 Workout 分离。
+必须明确区分：
+
+```text
+WorkoutFeedback
+=
+用户报告的原始主观事实
+
+AthleteStateSnapshot
+=
+系统结合多种证据后的推导状态
+```
+
+Phase 1 固定主观量表的字段语义并校验 `perceived_exertion` 为 1～10；其他量表的范围应在实现前明确。反馈如何进入状态算法属于 Phase 3。
 
 ---
 
@@ -490,7 +476,7 @@ Phase 1 只读，不实现自动 Plan Adaptation。
 
 # 12. Athlete State
 
-Phase 1 只定义最终对象，不实现完整 Evaluator。
+Phase 1 只定义快照的版本化、时间边界和基础状态语义，不实现完整 Evaluator：
 
 ```python
 @dataclass
@@ -498,29 +484,38 @@ class AthleteStateSnapshot:
     id: UUID
     user_id: UUID
 
+    # 用户维度下单调递增的状态版本。
     version: int
+
+    # 这份状态使用的事实数据截止到什么时间。
     as_of: datetime
 
-    aerobic_fitness: float | None
-    endurance: float | None
-    fatigue: float | None
+    # 系统推导的当前疲劳等级。
+    fatigue_level: FatigueLevel | None
+
+    # 系统推导的当前恢复状态。
+    recovery_level: RecoveryLevel | None
+
+    # 近期训练负荷指标。
+    # 具体定义和计算方式属于 Phase 3。
     recent_training_load: float | None
-    workout_completion: float | None
 
-    confidence: float
+    # 当前统计窗口内计划训练的完成比例。
+    # 统计窗口和具体计算方式属于 Phase 3。
+    workout_completion_rate: float | None
 
+    # 系统对当前状态判断的整体可信程度。
+    confidence: float | None
+
+    # 生成该状态快照的算法版本。
     algorithm_version: str
 
     created_at: datetime
 ```
 
-Phase 1 允许：
+Phase 1 允许读取 latest `AthleteStateSnapshot`，但不定义或虚构 `aerobic_fitness`、`endurance`、`threshold_fitness`、`pace_hr_trend` 等未经研究的指标。
 
-```text
-读取 latest AthleteStateSnapshot
-```
-
-但 State 更新逻辑留到后续 Coaching Intelligence Phase。
+具体指标定义、数值范围、计算窗口和算法属于 Phase 3 Coaching Intelligence。
 
 ---
 
@@ -602,16 +597,36 @@ Repository
 
 # 15. Conversation Model
 
-Phase 1 必须建立正式 Conversation 数据模型。
-
-核心对象：
+Phase 1 必须建立三套职责不同的状态模型：
 
 ```text
-Thread
-Turn
-Message
-AgentRun
+Conversation State
+├── Thread
+├── Message
+└── Turn
+
+Runtime Working State
+└── ReasoningState
+
+Execution Trace
+├── AgentRun
+└── RunStep
 ```
+
+分别回答：
+
+```text
+Conversation State
+→ 用户真正经历了什么？
+
+ReasoningState
+→ 当前 Run 内 Agent 已经知道和做过什么？
+
+Execution Trace
+→ Agent 当时实际上怎么完成任务？
+```
+
+三套状态必须分离。`RunStep` 是持久化审计记录，不能被当作 AgentRuntime 的工作状态。
 
 ---
 
@@ -691,29 +706,27 @@ TurnCommitted
 
 # 18. Message
 
-Message 单独持久化：
+Message 只保存用户与助手实际形成的 Canonical Conversation：
 
 ```python
+class MessageRole(StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
 @dataclass
 class Message:
     id: UUID
     thread_id: UUID
     turn_id: UUID
 
-    role: Literal[
-        "user",
-        "assistant",
-        "tool"
-    ]
-
+    role: MessageRole
     content: str
 
     created_at: datetime
 ```
 
-Phase 1 可以暂时不把所有 Tool Observation 保存成用户可见 Message。
-
-Agent Run Trace 与 Conversation Message 分开。
+Capability Call、Observation、Reasoning、内部模型调用等执行信息不得写入 `messages`，统一由 `AgentRun / RunStep` 记录。
 
 ---
 
@@ -748,7 +761,7 @@ replay
 
 # 20. Run Step
 
-Phase 1 就建议保留 Runtime Step 抽象：
+`RunStep` 是持久化 Execution Trace，不是 Runtime Working State：
 
 ```python
 @dataclass
@@ -757,11 +770,14 @@ class RunStep:
     run_id: UUID
 
     index: int
-
     kind: RunStepKind
 
-    input_data: dict | None
-    output_data: dict | None
+    # 仅 capability_call / observation 使用，
+    # 用于把一次能力调用与其结果关联。
+    call_id: UUID | None
+
+    input_data: dict[str, Any] | None
+    output_data: dict[str, Any] | None
 
     started_at: datetime
     completed_at: datetime | None
@@ -776,9 +792,42 @@ observation
 final
 ```
 
-这不是 Eval 本身。
+同一次 Capability Call 与对应 Observation 使用相同 `call_id`。
 
-这是以后 Eval 所依赖的 Runtime Trace。
+`reasoning` Step 只能保存模型调用元数据和最终 Action，不保存隐藏 Chain of Thought。
+
+## 20.1 ReasoningState
+
+`ReasoningState` 是当前 AgentRun 内存中的工作状态：
+
+```python
+ReasoningInteraction = CapabilityCallAction | Observation
+
+
+@dataclass
+class ReasoningState:
+    interactions: list[ReasoningInteraction]
+```
+
+典型状态：
+
+```text
+Action
+get_recent_workouts(days=14)
+
+Observation
+返回最近 4 次训练
+
+Action
+get_active_plan()
+
+Observation
+返回当前计划
+```
+
+它不保存隐藏 Chain of Thought，不属于数据库 Canonical State，也不通过查询 `run_steps` 恢复并驱动正常 Agent 执行。
+
+`FinalAction` 不追加进 `ReasoningState`，因为 Final 产生后 Runtime 已结束。
 
 ---
 
@@ -906,84 +955,92 @@ Reasoner 每次收到：
 @dataclass
 class ReasoningContext:
     context_bundle: ContextBundle
-
-    steps: tuple[RunStepView, ...]
-
-    last_observation: Observation | None
+    state: ReasoningState
 ```
 
-不要让 Reasoner 自己访问 Repository / Memory / Tool Registry。
+第一次 Reasoning 使用：
+
+```text
+ContextBundle
++
+empty ReasoningState
+```
+
+后续 Reasoning 使用同一 `ContextBundle`，并由 `ReasoningState.interactions` 提供已发生的 Capability Call 与 Observation。
+
+Reasoner 不访问 Repository、Memory、Tool Registry 或 `RunStep`，也不再单独接收 `last_observation`。
 
 ---
 
 # 25. Agent Runtime
 
-核心类：
+AgentRuntime 只拥有 Reason–Act–Observe 执行，不拥有 Conversation 生命周期：
 
 ```python
 class AgentRuntime:
-
     def __init__(
         self,
         reasoner: Reasoner,
         context_assembler: ContextAssembler,
         capability_executor: CapabilityExecutor,
         lifecycle: LifecycleDispatcher,
-        run_repository: AgentRunRepository,
+        trace_recorder: AgentTraceRecorder,
     ):
         ...
 ```
 
-Runtime 自己只编排。
-
-伪代码：
+ChatService 在调用 Runtime 前已经创建 `Turn` 与 `AgentRun`。Runtime 接收可信 ID 和当前输入，最终只返回 `FinalAction`：
 
 ```python
-async def run(command: AgentTurnCommand):
-
-    run = await create_run(...)
-
-    await lifecycle.before_turn(...)
-
-    context = await context_assembler.assemble(...)
-
-    await lifecycle.context_assembled(...)
+async def run(command: AgentTurnCommand) -> FinalAction:
+    context_bundle = await context_assembler.assemble(...)
+    state = ReasoningState(interactions=[])
 
     while True:
-
-        await lifecycle.before_reasoning(...)
-
-        action = await reasoner.reason(...)
-
-        await lifecycle.after_reasoning(...)
-
-        if action.type == "final":
-            return await finalize(...)
-
-        observation = await capability_executor.execute(
-            action,
-            execution_context,
+        action = await reasoner.reason(
+            ReasoningContext(
+                context_bundle=context_bundle,
+                state=state,
+            )
         )
 
-        record_step(...)
+        if isinstance(action, FinalAction):
+            await trace_recorder.record_final(action=action)
+            return action
+
+        call_id = uuid4()
+        await trace_recorder.record_action(
+            call_id=call_id,
+            action=action,
+        )
+        state.interactions.append(action)
+
+        observation = await capability_executor.execute(
+            name=action.capability,
+            arguments=action.arguments,
+            context=execution_context,
+        )
+
+        state.interactions.append(observation)
+        await trace_recorder.record_observation(
+            call_id=call_id,
+            observation=observation,
+        )
 ```
 
-注意：
-
-> Phase 1 不在 Architecture Contract 中规定固定几轮 Reasoning 或固定几次 Capability Call。
-
-循环终止由：
+AgentRuntime 不执行：
 
 ```text
-Reasoner Final Action
-Runtime Failure
-Cancellation
-System-level operational protection
+create Thread
+create Turn
+create AgentRun
+persist Assistant Message
+commit / fail / cancel Turn
 ```
 
-共同决定。
+Runtime 不通过读取 `RunStep` 驱动 Reasoning。`RunStep` 仅由 `AgentTraceRecorder` 持久化为审计与 Eval 依据。
 
-具体 operational limits 属于 Runtime Policy，不属于业务设计核心。
+循环终止由 Reasoner Final Action、typed failure、cancellation 与系统级运行保护共同决定；Phase 1 不把固定 Reasoning 次数或 Capability Call 次数写成业务契约。
 
 ---
 
@@ -1077,37 +1134,39 @@ Agent Core 无需变化。
 
 # 28. Lifecycle
 
-Phase 1 正式实现 Lifecycle Dispatcher。
+Phase 1 正式实现稳定的 Lifecycle Event 与 Dispatcher，但不构建完整 Plugin Framework。
 
-Lifecycle 不需要一开始就做完整 Plugin Framework。
+Lifecycle Event 分为：
 
-先定义稳定事件模型。
+```text
+Conversation Lifecycle
+→ 由 ChatService 发布
+
+Agent Execution Lifecycle
+→ 由 AgentRuntime 发布
+```
+
+同一事件只能有一个 Owner，禁止 ChatService 与 AgentRuntime 重复发布。
 
 ---
 
 # 29. Lifecycle Events
 
-建议：
+| Event | Owner |
+|---|---|
+| `TurnStarted` | ChatService |
+| `ContextAssemblyStarted` | AgentRuntime |
+| `ContextAssembled` | AgentRuntime |
+| `ReasoningStarted` | AgentRuntime |
+| `ReasoningCompleted` | AgentRuntime |
+| `CapabilityStarted` | AgentRuntime |
+| `CapabilityCompleted` | AgentRuntime |
+| `TurnCommitStarted` | ChatService |
+| `TurnCommitted` | ChatService |
+| `TurnFailed` | ChatService |
+| `TurnCancelled` | ChatService |
 
-```text
-TurnStarted
-
-ContextAssemblyStarted
-ContextAssembled
-
-ReasoningStarted
-ReasoningCompleted
-
-CapabilityStarted
-CapabilityCompleted
-
-TurnCommitStarted
-TurnCommitted
-
-TurnFailed
-```
-
-例如：
+`TurnCommitted` 至少包含：
 
 ```python
 @dataclass(frozen=True)
@@ -1115,24 +1174,13 @@ class TurnCommitted:
     turn_id: UUID
     thread_id: UUID
     user_id: UUID
-
     user_message_id: UUID
     assistant_message_id: UUID
-
     run_id: UUID
-
     committed_at: datetime
 ```
 
-这个 Event 未来会成为：
-
-```text
-Memory
-Eval
-Projector
-```
-
-的重要输入。
+它是未来 Memory、Eval 与异步 Projector 的重要输入。
 
 ---
 
@@ -1142,7 +1190,6 @@ Projector
 
 ```python
 class LifecycleDispatcher:
-
     async def publish(
         self,
         event: LifecycleEvent,
@@ -1150,70 +1197,39 @@ class LifecycleDispatcher:
         ...
 ```
 
-Phase 1 可以使用：
+Phase 1 使用 in-process Dispatcher，Listener 与 Publisher 保持解耦，不引入 RabbitMQ 或 Transactional Outbox。
+
+已知可靠性边界：
 
 ```text
-in-process event dispatcher
+DB COMMIT
+    ↓
+process crash
+    ↓
+TurnCommitted 尚未 publish
 ```
 
-暂时不引入 RabbitMQ。
-
-但 Listener 和 Publisher 必须解耦。
+Phase 1 明确接受这个 crash window。后续只有在 Memory Projection 等能力提出更高可靠性要求时，才设计 Transactional Outbox。
 
 ---
 
 # 31. Sync vs Async Lifecycle
 
-Phase 1 区分：
+必须区分：
 
 ```text
-Critical Lifecycle
-```
-
-和：
-
-```text
-Post-Commit Projection
-```
-
-例如：
-
-```text
-Persist assistant response
-```
-
-失败：
-
-```text
-Turn 不能 Commit
-```
-
-但未来：
-
-```text
-Semantic Memory Projector
-```
-
-失败：
-
-```text
-不应该让已经成功的用户回复变成失败 Turn
-```
-
-因此边界：
-
-```text
-Before Commit
-    =
+Before final DB Commit
+=
 transactional / critical
 
-
 After TurnCommitted
-    =
+=
 projection / eventually recoverable
 ```
 
-这个语义第一版就固定。
+持久化 Assistant Message、将 Turn 置为 committed、将 AgentRun 置为 completed 中任何一步失败，都不能发布 `TurnCommitted`。
+
+未来 Semantic Memory Projector 等后提交监听器失败，不应把已经成功提交的用户回复改成失败 Turn；其重试和可靠投递机制在对应 Phase 设计。
 
 ---
 
@@ -1285,9 +1301,7 @@ critical_constraints
 
 # 34. Context Providers
 
-ContextAssembler 不直接依赖数据库。
-
-采用 Provider：
+ContextAssembler 不直接依赖数据库，统一通过 Provider：
 
 ```python
 class WorkingContextProvider(Protocol):
@@ -1295,7 +1309,13 @@ class WorkingContextProvider(Protocol):
         ...
 
 class ConversationContextProvider(Protocol):
-    async def load(...):
+    async def load(
+        self,
+        *,
+        user_id: UUID,
+        thread_id: UUID,
+        exclude_turn_id: UUID,
+    ) -> list[MessageView]:
         ...
 
 class MemoryContextProvider(Protocol):
@@ -1307,21 +1327,9 @@ class CapabilityContextProvider(Protocol):
         ...
 ```
 
-Phase 1：
+Phase 1 的 `MemoryContextProvider` 使用 `NullMemoryContextProvider` 返回空结果，Phase 4 直接替换实现。
 
-```text
-MemoryContextProvider
-```
-
-使用：
-
-```text
-NullMemoryContextProvider
-```
-
-返回空结果。
-
-Phase 4 直接替换实现。
+`ConversationContextProvider` 必须显式接收 `exclude_turn_id`，保证当前 Turn 的 User Message 不会同时进入 `recent_messages` 与 `current_input`。
 
 ---
 
@@ -1369,65 +1377,45 @@ Domain Calculation
 
 # 36. Recent Conversation
 
-Phase 1 建议只提供有限 Recent Conversation。
+`ConversationContextProvider` 只读取有限数量、属于历史 committed Turn 的 user / assistant Message。
 
-原因不是把历史遗忘，而是：
-
-```text
-Long-term History
-```
-
-以后属于 Memory / Compaction 问题。
-
-因此：
+硬规则：
 
 ```text
-ConversationContextProvider
+recent_messages
+=
+历史 committed Turn 的 Canonical Conversation
+-
+当前 Turn
+
+current_input
+=
+当前用户输入，且只出现一次
 ```
 
-负责：
+Transaction A 已经持久化的当前 User Message 必须通过 `exclude_turn_id` 排除。Failed / Cancelled Turn 中保留的 User Message 也不能污染后续正常 Conversation Context。
 
-```text
-读取最近若干已提交 Message
-```
-
-具体 Context Budget 后续可以改，但接口保持稳定。
+长期历史的压缩与检索属于后续 Memory / Compaction 问题；Context Budget 可以演进，但上述去重和 committed-only 语义不能改变。
 
 ---
 
 # 37. Prompt Renderer
 
-建议 Reasoner 内部再有：
+Prompt Renderer 的输入是：
 
 ```text
 ContextBundle
-     ↓
+      +
+ReasoningState
+      ↓
 PromptRenderer
-     ↓
+      ↓
 ModelRequest
 ```
 
-而不是 ContextAssembler 输出大字符串。
+第一次 Reasoning 渲染 `ContextBundle + empty ReasoningState`；后续轮次将 Capability Call 与 Observation 从 `ReasoningState.interactions` 一并表达给模型。
 
-也就是说：
-
-```text
-Context Assembly
-```
-
-负责：
-
-> 有哪些信息。
-
-```text
-Prompt Rendering
-```
-
-负责：
-
-> 怎么给模型表达。
-
-两者分开。
+Context Assembly 负责“有哪些信息”，Prompt Rendering 负责“如何给模型表达”。PromptRenderer 不读取 `RunStep`，也不渲染隐藏 Chain of Thought。
 
 ---
 
@@ -1489,7 +1477,7 @@ run_steps
 
 # 39. Recommended Agent Persistence Model
 
-关系：
+持久化关系：
 
 ```text
 User
@@ -1502,148 +1490,157 @@ Thread
 Turn         Turn
  │
  ├── User Message
- ├── Assistant Message
+ ├── Assistant Message（仅 committed Turn）
  │
  └── AgentRun
        │
-       ├── Step 1
-       ├── Step 2
-       └── Step N
+       ├── RunStep 1
+       ├── RunStep 2
+       └── RunStep N
 ```
 
-Conversation Facts：
+三类状态的持久化语义：
 
 ```text
-messages
-turns
+Conversation Facts
+=
+threads / messages / turns
+
+Runtime Working State
+=
+ReasoningState，仅存在于当前 AgentRun 内存
+
+Execution Trace
+=
+agent_runs / run_steps
 ```
 
-和 Runtime Trace：
-
-```text
-agent_runs
-run_steps
-```
-
-分开。
+`messages` 只包含 user / assistant Canonical Conversation；Capability Call 与 Observation 通过带相同 `call_id` 的 `run_steps` 关联。
 
 ---
 
 # 40. Transaction Boundary
 
-Turn Commit 建议采用数据库事务：
+ChatService 使用两个短事务管理一次用户交互。禁止数据库事务跨越 LLM 或 Capability 执行过程。
+
+## Transaction A：Start Turn
 
 ```text
 BEGIN
 
-persist assistant message
+Validate / Create Thread
 
-update turn
-    status = committed
-    assistant_message_id = ...
-    committed_at = ...
+Create Turn
+    status = pending
 
-update agent_run
-    status = completed
+Insert User Message
+
+Turn.user_message_id = message.id
+
+Create AgentRun
+    status = running
+
+Turn.status = running
 
 COMMIT
 ```
 
-事务成功后才发布：
+提交成功后由 ChatService 发布 `TurnStarted`，然后 AgentRuntime 才开始执行。
+
+## Agent Runtime：事务外执行
 
 ```text
-TurnCommitted
+Context Assemble
+Reason
+Act
+Observe
+Reason
+...
+FinalAction
 ```
 
-必须满足：
+## Transaction B：Commit Turn
 
 ```text
-DB Commit
+BEGIN
+
+Insert Assistant Message
+
+Update Turn
+    assistant_message_id = ...
+    status = committed
+    committed_at = ...
+
+Update AgentRun
+    status = completed
+    completed_at = ...
+
+Optional:
+Update Thread.updated_at
+
+COMMIT
+```
+
+只有 Transaction B 成功后，ChatService 才发布：
+
+```text
+DB COMMIT
     ↓
 TurnCommitted
 ```
 
-禁止：
-
-```text
-TurnCommitted
-    ↓
-DB Commit
-```
-
-否则 projector 可能读取到尚未存在的数据。
+禁止在 Commit 前发布事件，否则 Projector 可能读取到尚未存在的数据。
 
 ---
 
 # 41. Failure Semantics
 
-如果 Reasoner / Capability 执行失败：
+AgentRuntime 负责停止内部 Reason / Capability 执行、释放 Runtime 资源，并向 ChatService 传播 typed failure。
+
+最终持久化状态由 ChatService 负责：
 
 ```text
-AgentRun
-status = failed
+BEGIN
 
-Turn
-status = failed
+Turn.status = failed
+AgentRun.status = failed
+
+COMMIT
 ```
 
-已经保存的：
-
-```text
-User Message
-```
-
-仍然可以保留。
-
-但：
-
-```text
-TurnCommitted
-```
-
-不发布。
-
-未来 Memory Projector 因此不会把失败交互当长期事实学习。
+已保存的 User Message 可以保留，但不得创建 committed Assistant Message。事务成功后 ChatService 发布 `TurnFailed`，绝不发布 `TurnCommitted`，因此失败交互不会触发长期 Memory Projection。
 
 ---
 
 # 42. Cancellation
 
-Phase 1 为 Turn 设计：
+AgentRuntime 捕获取消信号时，只负责停止内部执行、释放资源并传播 cancellation，不直接修改 Turn 或 AgentRun。
+
+ChatService 负责持久化：
 
 ```text
-cancelled
+BEGIN
+
+Turn.status = cancelled
+AgentRun.status = cancelled
+
+COMMIT
 ```
 
-状态。
+随后发布 `TurnCancelled`，不发布 `TurnCommitted`。
 
-Runtime 应捕获：
-
-```text
-asyncio.CancelledError
-```
-
-并执行生命周期收尾。
-
-取消的 Turn：
-
-```text
-不发布 TurnCommitted
-```
-
-未来如果产品希望中断消息也成为 Conversation Fact，可以通过单独语义设计，而不是默认等价于正常 committed Turn。
+取消 Turn 中已经保存的 User Message 可以保留，但不等价于正常 Canonical Conversation History；如果未来产品需要展示或恢复中断交互，应单独设计语义。
 
 ---
 
 # 43. Chat Application Service
 
-API 不直接操作 Agent Runtime。
+ChatService 是一次用户交互的 Application Orchestrator，拥有 Thread、Message、Turn、AgentRun 的 Conversation 生命周期与事务边界；AgentRuntime 只负责执行 Agent reasoning loop。
 
 入口：
 
 ```python
 class ChatService:
-
     async def send_message(
         self,
         *,
@@ -1654,21 +1651,48 @@ class ChatService:
         ...
 ```
 
-内部：
+完整流程：
 
 ```text
-Resolve/Create Thread
-       ↓
-Persist User Message
-       ↓
-Create Turn
-       ↓
-AgentRuntime.run
-       ↓
-Persist Assistant
-       ↓
-Commit Turn
+Resolve / Create Thread
+        ↓
+ConversationStore.start_turn()
+        ↓
+Transaction A COMMIT
+        ↓
+TurnStarted
+        ↓
+AgentRuntime.run(turn_id, run_id, ...)
+        ↓
+FinalAction
+        ↓
+TurnCommitStarted
+        ↓
+ConversationStore.commit_turn()
+        ↓
+Transaction B COMMIT
+        ↓
+TurnCommitted
 ```
+
+为避免 ChatService 依赖多个细碎 Repository 与 SQLAlchemy Session，定义应用级 Port：
+
+```python
+class ConversationStore(Protocol):
+    async def start_turn(...) -> StartedTurn:
+        ...
+
+    async def commit_turn(...) -> CommittedTurn:
+        ...
+
+    async def fail_turn(...) -> None:
+        ...
+
+    async def cancel_turn(...) -> None:
+        ...
+```
+
+Infrastructure 实现负责真实 SQLAlchemy Transaction。ChatService 拥有事务语义，但不直接操作 ORM 或 Session。
 
 ---
 
@@ -1777,8 +1801,6 @@ System Prompt 主要定义：
 
 # 47. Phase 1 Vertical Slice
 
-Phase 1 的核心验收场景：
-
 数据库预置：
 
 ```text
@@ -1792,12 +1814,14 @@ Recent Workouts:
 8/27 interval 8km
 
 Latest Athlete State:
-fatigue = moderate
-recent_training_load = rising
+fatigue_level = moderate
+recent_training_load = fixture value
 
 Plan:
 当前第 6 周
 ```
+
+这里的 `AthleteStateSnapshot` 是测试 Fixture / Seed Data，仅用于验证 ContextAssembler 与 AgentRuntime 能读取状态，不代表 Phase 1 已实现状态计算算法。
 
 用户：
 
@@ -1808,13 +1832,17 @@ Plan:
 期望运行：
 
 ```text
-User Input
+ChatService
+    ↓
+Transaction A Commit
+    ↓
+AgentRuntime
     ↓
 Context Assembly
     │
     ├── Current Goal
     ├── Active Plan
-    └── Latest Athlete State
+    └── Seed AthleteStateSnapshot
     ↓
 Reasoner
     ↓
@@ -1824,22 +1852,23 @@ Observation
     ↓
 Reasoner
     ↓
-Final Answer
+FinalAction
+    ↓
+Transaction B Commit
+    ↓
+TurnCommitted
 ```
-
-重点不是回答文案有多漂亮。
 
 重点检查：
 
 ```text
-是否正确构建 Turn
-是否正确生成 AgentRun
-是否经过 ContextAssembler
-是否通过 CapabilityExecutor 获取数据
-是否产生 Observation
-是否正确持久化 Step
-是否正确 Commit
-是否发布 TurnCommitted
+ConversationStore 是否正确建立 Turn / User Message / AgentRun
+ContextAssembler 是否排除当前 Turn 并避免 current_input 重复
+CapabilityExecutor 是否获得可信 ExecutionContext
+ReasoningState 是否按 Action / Observation 演进
+RunStep 是否使用 call_id 关联调用与结果
+FinalAction 是否由 ChatService 正确 Commit
+TurnCommitted 是否只在 Transaction B 成功后发布
 ```
 
 ---
@@ -1879,70 +1908,64 @@ if message contains "计划":
 
 # 49. Unit Tests
 
-Phase 1 至少覆盖：
+Phase 1 不要求为了“Unit 层存在”机械补测试。
+
+仅对复杂纯逻辑、关键状态转换，以及无需外部依赖即可验证的高风险逻辑编写必要 Unit Test，例如：
 
 ```text
-Domain model invariants
-
-Repository user isolation
-
-Context assembly
-
-Reasoner action parsing
-
-Capability execution context
-
-Agent runtime:
-    action → observation → reason
-
-Turn commit
-
-Turn failure
-
-Lifecycle event ordering
+Reasoner Action parsing
+ReasoningState interaction ordering
+Domain invariants with non-trivial boundaries
+Lifecycle event value semantics
 ```
+
+简单数据模型、薄封装、CRUD 与显而易见的映射不单独补低价值 Unit Test。
 
 ---
 
 # 50. Integration Tests
 
-至少验证：
+Phase 1 以 Integration Test 为主要验收手段，重点验证：
 
 ```text
-PostgreSQL Repository
-
-Chat API
-
-完整 Agent Turn
-
-TurnCommitted after DB commit
-
-Failed Turn does not publish TurnCommitted
+ConversationStore start / commit transaction
+ConversationStore fail / cancel transaction
+Repository user isolation
+ChatService complete turn
+TurnCommitted after Transaction B commit
+Failed / Cancelled Turn never publishes TurnCommitted
+ConversationContextProvider committed-only and current-turn exclusion
+Capability execution with trusted context
+PostgreSQL repositories and Chat API
 ```
 
 ---
 
 # 51. Scenario Tests
 
-不要只写单元测试。
-
-增加：
+Scenario Test 验证完整 Agent 行为链：
 
 ```text
-tests/scenarios/
+Context
+→ Reason
+→ Capability
+→ Observation
+→ Reason
+→ Final
+→ Commit
 ```
 
-例如：
+至少包含：
 
 ```text
 test_recent_training_analysis.py
 test_current_plan_question.py
 test_goal_context.py
+test_failed_turn.py
+test_cancelled_turn.py
 ```
 
-暂时使用 Fake LLM Reasoner 或 deterministic scripted reasoner。
-
-这样可以稳定验证 Agent Runtime，而不是每次测试都花真实模型费用。
+使用 `ScriptedReasoner` 或 `FakeReasoner` 稳定验证 Runtime，不依赖真实模型费用或非确定输出。
 
 ---
 
@@ -2037,29 +2060,21 @@ asyncpg.exceptions.ConnectionError
 
 完成 Phase 1 后必须满足：
 
-```text
-Agent Runtime 不 import SQLAlchemy ORM。
-
-Reasoner 不 import Repository。
-
-ContextAssembler 不执行 SQL。
-
-LLM 不决定 user_id。
-
-Capability 不直接读取 HTTP Request。
-
-TurnCommitted 只在 DB Commit 后产生。
-
-失败 Turn 不触发长期 Projection 事件。
-
-Athlete State 和 Workout 不混表。
-
-Conversation Message 和 Agent Trace 分开。
-
-Memory 暂时为空，但已经存在正式接入位置。
-
-Tool Runtime 暂时未实现，但 Agent Runtime 已通过 Port 与其解耦。
-```
+1. Conversation State、Runtime Working State 与 Execution Trace 必须分离。
+2. Message 只保存 user / assistant Canonical Conversation。
+3. AgentRuntime 不通过读取 RunStep 驱动正常 Reasoning。
+4. ReasoningState 只存在于当前 AgentRun 生命周期，用于维护 Action / Observation 工作状态。
+5. ChatService 拥有 Conversation 生命周期与事务边界；AgentRuntime 不创建 AgentRun，也不提交 Turn。
+6. AgentRuntime 只负责 Context → Reason → Action → Observation → Reason → Final。
+7. 当前 User Message 只通过 `ContextBundle.current_input` 提供；`recent_messages` 只包含历史 committed Turn，且排除当前 Turn。
+8. `TurnCommitted` 必须在最终数据库事务成功之后发布。
+9. 失败或取消 Turn 可以保留 User Message，但不能形成 committed Assistant Message，也不能触发长期 Memory Projection。
+10. Phase 1 只定义 AthleteState 的稳定数据语义，不实现或虚构 Coaching Intelligence 算法。
+11. AgentRuntime 不 import SQLAlchemy ORM，Reasoner 不 import Repository，ContextAssembler 不执行 SQL。
+12. LLM、Capability 参数或 HTTP Body 都不能决定 `user_id`；身份只来自可信 `RequestContext`。
+13. Capability 不读取 HTTP Request，只通过不可变 `CapabilityExecutionContext` 接收可信运行信息。
+14. AthleteStateSnapshot、Workout 与 WorkoutFeedback 保持各自的数据语义，不混表、不互相冒充。
+15. Memory 暂时为空但具有正式 `MemoryContextProvider` 接缝；Tool Runtime 暂未实现但通过 `CapabilityExecutor` Port 解耦。
 
 任何实现如果违反上述规则，即使功能能够运行，也视为 Phase 1 未完成。
 
@@ -2074,76 +2089,49 @@ Step 1
 Project Foundation
 FastAPI / SQLAlchemy / Alembic / Config
 
-        ↓
-
 Step 2
 Identity
-RequestContext
-User Isolation
-
-        ↓
+RequestContext / User Isolation
 
 Step 3
 Coaching Domain
-Workout / Goal / Plan / AthleteState
-Repository Ports
-
-        ↓
+Workout / Feedback / Goal / Plan / AthleteStateSnapshot
 
 Step 4
-Conversation Persistence
-Thread / Message / Turn / AgentRun / RunStep
-
-        ↓
+Canonical Conversation + ConversationStore
+Thread / Message / Turn / AgentRun / 双事务
 
 Step 5
 Lifecycle
-Events / Dispatcher / TurnCommitted
-
-        ↓
+Events / Owner / Dispatcher
 
 Step 6
 Context System
 Providers / WorkingContext / ContextBundle
 
-        ↓
-
 Step 7
 Reasoner
-Reasoner Port / LLM Adapter / Action Model
-
-        ↓
+Reasoner Port / ReasoningState / LLM Adapter / Action Model
 
 Step 8
 Capability Port
-Simple Capability Adapter
-
-        ↓
+SimpleCapabilityExecutor
 
 Step 9
-Agent Runtime
-Reason → Action → Observation → Reason
-
-        ↓
+Execution Trace + AgentRuntime
+TraceRecorder / Reason → Action → Observation → Reason
 
 Step 10
-Chat Application
-FastAPI Endpoint
-
-        ↓
+ChatService + FastAPI Endpoint
 
 Step 11
-Trace / Structured Logging / SSE
-
-        ↓
+Structured Logging / SSE Adapter
 
 Step 12
-Scenario Tests
+Integration + Scenario Tests
 ```
 
-不要先写 Agent Loop，然后回头补数据模型。
-
-先把状态和生命周期边界建好。
+不要先写 Agent Loop 再回头补数据模型和事务；先把状态所有权与生命周期边界建好。
 
 ---
 
@@ -2156,37 +2144,44 @@ Phase 1 完成需要同时满足：
 ```text
 模块依赖符合 ARCHITECTURE.md
 无跨层 ORM 调用
-Runtime / Domain / Infrastructure 边界清晰
+Conversation / Runtime / Trace 边界清晰
+ChatService / AgentRuntime ownership 清晰
 ```
 
 ### Domain
 
 ```text
 Workout
+WorkoutFeedback
 Goal
 Plan
 AthleteStateSnapshot
 
 模型与 Repository Port 可正常工作
+不包含虚构的 AthleteState 算法
 ```
 
 ### Agent
 
 ```text
 Thread
+Message
 Turn
+ReasoningState
 AgentRun
 RunStep
 
-完整生命周期可运行
+三套状态各自按正式语义运行
 ```
 
 ### Context
 
 ```text
 Working Context
-Recent Conversation
+Historical committed Conversation
+Current input exactly once
 Capability Context
+Null Memory Context
 
 统一通过 ContextAssembler 进入 Reasoner
 ```
@@ -2194,50 +2189,26 @@ Capability Context
 ### Runtime
 
 ```text
-Reason
+ContextBundle + ReasoningState
 → Capability Call
 → Observation
 → Reason
-→ Final
+→ FinalAction
 ```
 
-完整执行成功。
-
-### Persistence
+### Persistence & Lifecycle
 
 ```text
-User Message
-Assistant Message
-Turn
-AgentRun
-RunStep
+Transaction A 成功后 TurnStarted
+Transaction B 成功后 TurnCommitted
+Failed / Cancelled Turn 正确收尾
+Message 与 RunStep 语义分离
+call_id 正确关联调用与观察
 ```
-
-均能够正常持久化。
-
-### Lifecycle
-
-正常执行：
-
-```text
-TurnStarted
-...
-TurnCommitted
-```
-
-失败执行：
-
-```text
-TurnStarted
-...
-TurnFailed
-```
-
-且不会错误发送 `TurnCommitted`。
 
 ### Tests
 
-Unit、Integration、Scenario 三层测试通过。
+Integration Test 与 Scenario Test 覆盖关键链路并全部通过；仅对复杂纯逻辑和高风险状态转换保留必要 Unit Test。
 
 ---
 
@@ -2346,61 +2317,51 @@ if memory_enabled:
 Phase 1 最终建立：
 
 ```text
-                    HTTP
-                     │
-                     ▼
-               RequestContext
-                     │
-                     ▼
-                ChatService
-                     │
-                     ▼
-                 AgentRun
-                     │
-                     ▼
-             ContextAssembler
-               /     |      \
-              /      |       \
-       Working    Recent     Memory Port
-       Context  Conversation    (Null)
-              \      |       /
-               \     |      /
-                Reasoner
-                    │
-              Agent Action
-                    │
-          CapabilityExecutor
-                    │
-             Domain Service
-                    │
-               PostgreSQL
-                    │
-              Observation
-                    │
-                Reasoner
-                    │
-               Final Output
-                    │
-                 Commit
-                    │
-             TurnCommitted
-                    │
-          Future Projectors
+HTTP
+  ↓
+RequestContext
+  ↓
+ChatService
+  ↓
+ConversationStore.start_turn()
+  ↓
+Transaction A Commit
+  ↓
+TurnStarted
+  ↓
+AgentRuntime
+  │
+  ├── ContextAssembler
+  │     ├── Working Context
+  │     ├── Historical committed Conversation
+  │     └── Memory Port（Null）
+  │
+  ├── Reasoner
+  │     └── ReasoningState
+  │
+  ├── CapabilityExecutor
+  │     └── Domain Application Service
+  │
+  └── TraceRecorder
+        └── RunStep
+  ↓
+FinalAction
+  ↓
+ChatService
+  ↓
+ConversationStore.commit_turn()
+  ↓
+Transaction B Commit
+  ↓
+TurnCommitted
+  ↓
+Future Projectors
 ```
 
-Phase 1 解决的不是：
+Phase 1 解决的不是“Run Coach 已经有多少功能”，而是：
 
-> “Run Coach 已经有多少功能？”
+> **任何新能力应该放在哪里、由谁拥有、通过什么接口进入 Agent、在什么生命周期修改状态。**
 
-而是：
+Phase 2 的 Tool Runtime、Phase 3 的 Coaching Intelligence、Phase 4 的 Memory 和 Phase 5 的 Eval 都应作为独立模块接入，不改变 Agent Core 的基本形态。
 
-> **从今天开始，任何新能力应该放在哪里、由谁拥有、通过什么接口进入 Agent、在什么生命周期修改状态。**
-
-这个问题一旦解决，Phase 2 的 Tool Runtime、Phase 3 的 Coaching Intelligence、Phase 4 的 Memory 和 Phase 5 的 Eval 都可以作为独立模块逐步长出来，而不再改变 Agent Core 的基本形态。
-
-```
-
-这版 Phase 1 里有一个我刻意做的调整：**没有先做“弱化版 ToolRegistry”**，而是只定义 `CapabilityExecutor` Port。因为我们已经决定 Phase 2 要把 Tool System 一次做到正式架构，那么 Phase 1 再做一个半成品 Registry 反而是重复劳动。
-
-同理，Memory 这里直接预留 `MemoryContextProvider + TurnCommitted` 两个接缝，但不先造一个“简单 pgvector Memory”。这样 Phase 1 写完之后，Phase 2/4 都是在往插槽里装正式实现，而不是拆旧实现。
-```
+Phase 1 不实现弱化版 ToolRegistry，而是保留 `CapabilityExecutor` Port；不实现临时 pgvector Memory，而是保留 `MemoryContextProvider + TurnCommitted` 两个正式接缝。
