@@ -344,16 +344,19 @@ class SqlAlchemyPlanChangeRepository:
         except IntegrityError as exc:
             raise ConflictError("unresolved_plan_change_exists") from exc
 
-    async def update_status(
+    async def transition(
         self,
         *,
         user_id: UUID,
         plan_change_id: UUID,
-        status: PlanChangeStatus,
+        expected: PlanChangeStatus,
+        target: PlanChangeStatus,
         resolved_at: datetime | None = None,
         resulting_plan_id: UUID | None = None,
     ) -> PlanChange:
+        """用户行锁 + CAS：防止 stale read 后的 last-write-wins 覆盖。"""
         async with short_session(self._sessions, commit=True) as session:
+            await lock_user_row(session, user_id)
             row = await session.scalar(
                 select(PlanChangeRow).where(
                     PlanChangeRow.id == plan_change_id,
@@ -362,7 +365,9 @@ class SqlAlchemyPlanChangeRepository:
             )
             if row is None:
                 raise NotFoundError("计划调整不存在")
-            row.status = status.value
+            if PlanChangeStatus(row.status) is not expected:
+                raise ConflictError("plan_change_status_conflict")
+            row.status = target.value
             if resolved_at is not None:
                 row.resolved_at = resolved_at
             if resulting_plan_id is not None:

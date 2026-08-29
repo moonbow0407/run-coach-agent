@@ -101,20 +101,22 @@ class PlanAdaptationService:
     async def promote_draft_for_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
         for change in await self._changes.list_by_turn(user_id=user_id, turn_id=turn_id):
             if change.status is PlanChangeStatus.DRAFT:
-                await self._changes.update_status(
+                await self._changes.transition(
                     user_id=user_id,
                     plan_change_id=change.id,
-                    status=PlanChangeStatus.PENDING_CONFIRMATION,
+                    expected=PlanChangeStatus.DRAFT,
+                    target=PlanChangeStatus.PENDING_CONFIRMATION,
                 )
 
     async def abandon_draft_for_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
         now = self._clock.now()
         for change in await self._changes.list_by_turn(user_id=user_id, turn_id=turn_id):
             if change.status is PlanChangeStatus.DRAFT:
-                await self._changes.update_status(
+                await self._changes.transition(
                     user_id=user_id,
                     plan_change_id=change.id,
-                    status=PlanChangeStatus.ABANDONED,
+                    expected=PlanChangeStatus.DRAFT,
+                    target=PlanChangeStatus.ABANDONED,
                     resolved_at=now,
                 )
 
@@ -147,11 +149,20 @@ class PlanAdaptationService:
             raise NotFoundError("计划调整不存在")
         if change.status is PlanChangeStatus.REJECTED:
             return change
-        if change.status is not PlanChangeStatus.PENDING_CONFIRMATION:
-            raise ConflictError("plan_change_not_rejectable")
-        return await self._changes.update_status(
-            user_id=user_id,
-            plan_change_id=plan_change_id,
-            status=PlanChangeStatus.REJECTED,
-            resolved_at=self._clock.now(),
-        )
+        try:
+            return await self._changes.transition(
+                user_id=user_id,
+                plan_change_id=plan_change_id,
+                expected=PlanChangeStatus.PENDING_CONFIRMATION,
+                target=PlanChangeStatus.REJECTED,
+                resolved_at=self._clock.now(),
+            )
+        except ConflictError:
+            # CAS 失败：读取到的 PENDING 已被并发 confirm / reject 等改写。
+            # 重新读取给出准确结果，绝不覆盖已生效的终态。
+            current = await self._changes.get(
+                user_id=user_id, plan_change_id=plan_change_id
+            )
+            if current is not None and current.status is PlanChangeStatus.REJECTED:
+                return current
+            raise ConflictError("plan_change_not_rejectable") from None

@@ -1,5 +1,6 @@
 """PlanChange / TrainingPlan 持久化约束与确认激活。"""
 
+import asyncio
 from datetime import date, timedelta
 
 import pytest
@@ -11,7 +12,7 @@ from app.coaching.application.athlete_recompute_service import AthleteStateRecom
 from app.coaching.application.errors import StalePlanChangeError
 from app.coaching.application.plan_adaptation_service import PlanAdaptationService
 from app.coaching.application.training_analysis_service import TrainingAnalysisService
-from app.coaching.domain.plan.models import PlanChangeStatus, PlanStatus
+from app.coaching.domain.plan.models import PlanChange, PlanChangeStatus, PlanStatus
 from app.common.clock import FrozenClock
 from app.common.errors import ConflictError
 from app.common.ids import new_id
@@ -292,3 +293,101 @@ async def test_activation_does_not_update_old_sessions(
             ).all()
         )
     assert still == original_ids
+
+
+async def _propose_pending(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+):
+    """seed + recompute + propose + promote，返回 (services, seed, plan_change)。"""
+    async with short_session(sessions, commit=True) as session:
+        seed = await seed_vertical_slice(session)
+    recompute, adaptation, plans = _services(sessions, clock)
+    await recompute.recompute(user_id=seed.user_id, as_of=clock.now())
+    turn_id = new_id()
+    change, _ = await adaptation.propose_reduce_upcoming_load(
+        user_id=seed.user_id,
+        turn_id=turn_id,
+        run_id=new_id(),
+        as_of=clock.now(),
+        based_on_plan_version=1,
+        based_on_state_version=2,
+        horizon_days=7,
+        reason="降负荷",
+    )
+    await adaptation.promote_draft_for_turn(user_id=seed.user_id, turn_id=turn_id)
+    return adaptation, plans, seed, change
+
+
+@pytest.mark.asyncio
+async def test_cas_reject_does_not_overwrite_confirmed(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    """stale read 的 reject 写入不允许覆盖已 CONFIRMED 的提案。"""
+    adaptation, _plans, seed, change = await _propose_pending(sessions, clock)
+    result = await adaptation.confirm(user_id=seed.user_id, plan_change_id=change.id)
+    assert result.plan_change.status is PlanChangeStatus.CONFIRMED
+
+    stored = await adaptation.get(user_id=seed.user_id, plan_change_id=change.id)
+    assert stored.status is PlanChangeStatus.CONFIRMED
+    with pytest.raises(ConflictError):
+        await adaptation.reject(user_id=seed.user_id, plan_change_id=change.id)
+    final = await adaptation.get(user_id=seed.user_id, plan_change_id=change.id)
+    assert final.status is PlanChangeStatus.CONFIRMED
+    assert final.resulting_plan_id == result.plan_change.resulting_plan_id
+
+
+@pytest.mark.asyncio
+async def test_cas_reject_after_stale_pending_read(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    """在 reject 读到 PENDING 之后、写入之前 confirm 已提交——CAS 必须拒绝写入。"""
+    adaptation, _plans, seed, change = await _propose_pending(sessions, clock)
+    repo = SqlAlchemyPlanChangeRepository(sessions)
+    # 模拟竞态窗口：reject 侧先读到 PENDING，随后 confirm 完成激活。
+    stale_read = await repo.get(user_id=seed.user_id, plan_change_id=change.id)
+    assert stale_read is not None
+    assert stale_read.status is PlanChangeStatus.PENDING_CONFIRMATION
+    await adaptation.confirm(user_id=seed.user_id, plan_change_id=change.id)
+    with pytest.raises(ConflictError, match="plan_change_status_conflict"):
+        await repo.transition(
+            user_id=seed.user_id,
+            plan_change_id=change.id,
+            expected=PlanChangeStatus.PENDING_CONFIRMATION,
+            target=PlanChangeStatus.REJECTED,
+            resolved_at=clock.now(),
+        )
+    final = await adaptation.get(user_id=seed.user_id, plan_change_id=change.id)
+    assert final.status is PlanChangeStatus.CONFIRMED
+
+
+@pytest.mark.asyncio
+async def test_concurrent_confirm_and_reject_reach_consistent_state(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    """confirm 与 reject 并发：只有一个生效，终态不允许出现交叉组合。"""
+    adaptation, plans, seed, change = await _propose_pending(sessions, clock)
+    results = await asyncio.gather(
+        adaptation.confirm(user_id=seed.user_id, plan_change_id=change.id),
+        adaptation.reject(user_id=seed.user_id, plan_change_id=change.id),
+        return_exceptions=True,
+    )
+    confirm_result, reject_result = results
+    active = await plans.get_active(user_id=seed.user_id)
+    stored = await adaptation.get(user_id=seed.user_id, plan_change_id=change.id)
+    if isinstance(confirm_result, BaseException):
+        # reject 生效：V1 仍 ACTIVE，提案 REJECTED。
+        assert isinstance(reject_result, PlanChange)
+        assert isinstance(confirm_result, Exception)
+        assert stored.status is PlanChangeStatus.REJECTED
+        assert active is not None and active.id == seed.plan_id
+        assert active.version == 1
+    else:
+        # confirm 生效：V2 ACTIVE，提案 CONFIRMED。
+        assert isinstance(reject_result, BaseException)
+        assert stored.status is PlanChangeStatus.CONFIRMED
+        assert active is not None and active.version == 2
+        assert stored.resulting_plan_id == active.id
