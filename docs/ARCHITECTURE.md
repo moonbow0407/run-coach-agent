@@ -1463,36 +1463,38 @@ ChatService
      ↓
 Start Turn + AgentRun
      ↓
-ContextAssembler → ContextBundle
-     ↓
 AgentRuntime
-     ↓
-ToolRuntime.create_session
-     ↓
-Reasoner（ContextBundle + ReasoningState + 当前可见 Tool）
-     ↓
-Action
      │
-     ├── FinalAction
+     ├── ContextAssembler → ContextBundle
      │
-     └── ToolCallAction
+     ├── ToolRuntime.create_session
+     │
+     └── Reasoner（ContextBundle + ReasoningState + 当前可见 Tool）
                ↓
-          ToolRuntime.execute
-               ↓
-          Observation
-               ↓
-          ReasoningState
-               ↓
-            Reasoner
-               ↓
-              ...
-               ↓
-          FinalAction
-               ↓
-        ChatService Commit
-               ↓
-         TurnCommitted
+            Action
+               │
+               ├── FinalAction
+               │
+               └── ToolCallAction
+                         ↓
+                    ToolRuntime.execute
+                         ↓
+                    Observation
+                         ↓
+                    ReasoningState
+                         ↓
+                      Reasoner
+                         ↓
+                        ...
+                         ↓
+                    FinalAction
+     ↓
+ChatService Commit
+     ↓
+TurnCommitted
 ```
+
+`ChatService` 拥有 Turn / AgentRun 生命周期。`AgentRuntime` 拥有单次 Run 的推理循环，并在循环内调用 `ContextAssembler` 与 `ToolRuntime`。`ContextAssembler` 不调用 `AgentRuntime`。
 
 模型可以自主决定：
 

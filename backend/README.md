@@ -1,6 +1,8 @@
-# Run Coach Agent — Backend (Phase 2)
+# Run Coach Agent — Backend (Phase 2 Completed)
 
-Phase 2 在 Phase 1 的 Agent Core 骨架（可信身份、Coaching 领域只读模型、Conversation 双事务、Reason–Act–Observe 循环）之上，用正式 Dynamic Tool Runtime 替换临时 Capability 路径：
+Phase 1–2 已落地：Agent Core 骨架（可信身份、Coaching 领域只读模型、Conversation 双事务、Reason–Act–Observe 循环）与 Dynamic Tool Runtime。下一阶段见 `docs/phases/PHASE_3_COACHING_INTELLIGENCE.md`。
+
+Phase 2 用正式 Dynamic Tool Runtime 替换了临时 Capability 路径：
 
 - **tools/**：Tool Registry（存在性唯一事实来源）、进程内关键词搜索、Run-local Discovery / Resolver / ToolSession、统一 ToolExecutor（存在性 / 可见性 / 参数 / 授权 / 超时 / 错误归一化）
 - **初始可见工具**：`search_tools` + `get_recent_workouts`（always-on）；其余五个只读领域工具需经 `search_tools` 发现后才可见与可执行

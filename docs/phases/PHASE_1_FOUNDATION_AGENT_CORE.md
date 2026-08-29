@@ -1,7 +1,8 @@
 # Phase 1 — Foundation & Agent Core
 
-> Status: Active
+> Status: Completed
 > Depends on: `docs/ARCHITECTURE.md`
+> Next: `docs/phases/PHASE_2_DYNAMIC_TOOL_RUNTIME.md`
 > Scope: Foundation + Coaching Domain Foundation + Agent Runtime + Lifecycle + Context
 > Out of Scope: 完整 Tool Runtime、长期 Memory、Athlete State 算法、Plan Adaptation、Eval Runner
 
