@@ -1,12 +1,10 @@
-"""Tool Provider：只负责装配一组 Tool，注册生命周期归 Registry。
-
-Phase 2 仅实现 System Provider（search_tools）与 Coaching Provider
-（六个 read-only 领域工具），不引入 Provider Manager 或数据库 Catalog。
-"""
+"""Tool Provider：只负责装配一组 Tool，注册生命周期归 Registry。"""
 
 from app.coaching.application.athlete_service import AthleteStateQueryService
 from app.coaching.application.goal_service import GoalQueryService
+from app.coaching.application.plan_adaptation_service import PlanAdaptationService
 from app.coaching.application.plan_service import PlanQueryService
+from app.coaching.application.training_analysis_service import TrainingAnalysisService
 from app.coaching.application.workout_service import WorkoutQueryService
 from app.tools.builtin.coaching import (
     GetActiveGoalTool,
@@ -16,7 +14,9 @@ from app.tools.builtin.coaching import (
     GetWorkoutDetailTool,
     GetWorkoutFeedbackTool,
 )
+from app.tools.builtin.plan_adaptation import ProposePlanAdaptationTool
 from app.tools.builtin.search_tools import SearchToolsTool
+from app.tools.builtin.training_analysis import AnalyzeTrainingLoadTool, AnalyzeWorkoutTool
 from app.tools.registry.protocol import AnyTool
 from app.tools.resolver.resolver import ToolResolver
 from app.tools.search.keyword_search import KeywordToolSearch
@@ -34,7 +34,7 @@ class SystemToolProvider:
 
 
 class CoachingToolProvider:
-    """Coaching 领域的六个 read-only Tool。"""
+    """Coaching 领域 Tool：只读查询 + 分析 + 计划调整草案。"""
 
     def __init__(
         self,
@@ -43,11 +43,15 @@ class CoachingToolProvider:
         goal_service: GoalQueryService,
         plan_service: PlanQueryService,
         athlete_service: AthleteStateQueryService,
+        analysis_service: TrainingAnalysisService,
+        plan_adaptation_service: PlanAdaptationService,
     ) -> None:
         self._workout_service = workout_service
         self._goal_service = goal_service
         self._plan_service = plan_service
         self._athlete_service = athlete_service
+        self._analysis_service = analysis_service
+        self._plan_adaptation_service = plan_adaptation_service
 
     def tools(self) -> list[AnyTool]:
         return [
@@ -57,4 +61,7 @@ class CoachingToolProvider:
             GetActiveGoalTool(goal_service=self._goal_service),
             GetActivePlanTool(plan_service=self._plan_service),
             GetLatestAthleteStateTool(athlete_service=self._athlete_service),
+            AnalyzeTrainingLoadTool(analysis=self._analysis_service),
+            AnalyzeWorkoutTool(analysis=self._analysis_service),
+            ProposePlanAdaptationTool(adaptation=self._plan_adaptation_service),
         ]

@@ -154,6 +154,8 @@ async def seed_vertical_slice(
             recovery_level="fair",
             recent_training_load=42.0,
             workout_completion_rate=0.85,
+            training_load_coverage=None,
+            signals=[],
             confidence=0.7,
             algorithm_version="seed-fixture",
             created_at=now,

@@ -5,9 +5,11 @@ from enum import StrEnum
 
 
 class ToolRisk(StrEnum):
-    """风险等级。Phase 2 只提供并执行 read_only；mutating 保留语义但不落地。"""
+    """风险等级。模型 Runtime 允许 READ_ONLY / ANALYZE / DRAFT，拒绝 MUTATING。"""
 
     READ_ONLY = "read_only"
+    ANALYZE = "analyze"
+    DRAFT = "draft"
     MUTATING = "mutating"
 
 

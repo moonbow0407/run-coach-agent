@@ -26,6 +26,10 @@ from app.tools.resolver.session import ToolSession
 
 logger = logging.getLogger(__name__)
 
+_MODEL_EXECUTABLE_RISKS = frozenset(
+    {ToolRisk.READ_ONLY, ToolRisk.ANALYZE, ToolRisk.DRAFT}
+)
+
 
 class ToolExecutor:
     def __init__(
@@ -78,12 +82,12 @@ class ToolExecutor:
                 action, ToolErrorCode.INVALID_ARGUMENTS, _validation_message(exc)
             )
 
-        # 5. read-only 授权：Phase 2 不提供也不执行 mutating Tool。
-        if entry.definition.risk is not ToolRisk.READ_ONLY:
+        # 5. 授权：模型可执行 READ_ONLY / ANALYZE / DRAFT；MUTATING 一律拒绝。
+        if entry.definition.risk not in _MODEL_EXECUTABLE_RISKS:
             return _error_observation(
                 action,
                 ToolErrorCode.TOOL_NOT_AUTHORIZED,
-                f"工具未获执行授权（当前仅允许只读工具）: {name}",
+                f"工具未获执行授权（不允许 {entry.definition.risk.value}）: {name}",
             )
 
         # 6/7. timeout 统一控制 + 执行 + 结果归一化。

@@ -7,6 +7,7 @@ from app.infrastructure.database.models.agent import (
 )
 from app.infrastructure.database.models.coaching import (
     AthleteStateSnapshotRow,
+    PlanChangeRow,
     PlannedSessionRow,
     TrainingGoalRow,
     TrainingPlanRow,
@@ -19,6 +20,7 @@ __all__ = [
     "AgentRunRow",
     "AthleteStateSnapshotRow",
     "MessageRow",
+    "PlanChangeRow",
     "PlannedSessionRow",
     "RunStepRow",
     "ThreadRow",

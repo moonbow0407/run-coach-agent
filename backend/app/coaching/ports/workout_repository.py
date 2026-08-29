@@ -15,6 +15,17 @@ class WorkoutRepository(Protocol):
     ) -> list[Workout]:
         ...
 
+    async def list_between(
+        self,
+        *,
+        user_id: UUID,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> list[Workout]:
+        """查询 start <= started_at <= end 的训练，强制 user_id 隔离。"""
+        ...
+
     async def get(
         self,
         *,
@@ -29,4 +40,13 @@ class WorkoutRepository(Protocol):
         user_id: UUID,
         workout_id: UUID,
     ) -> WorkoutFeedback | None:
+        ...
+
+    async def list_feedback_for_workouts(
+        self,
+        *,
+        user_id: UUID,
+        workout_ids: list[UUID],
+    ) -> list[WorkoutFeedback]:
+        """批量读取 Feedback，避免按 workout 逐条查询。"""
         ...

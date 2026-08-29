@@ -1,0 +1,158 @@
+"""AthleteStateSnapshot 追加语义：append-only、版本单调、用户锁、查询不计算。"""
+
+import asyncio
+from datetime import timedelta
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.coaching.application.athlete_recompute_service import AthleteStateRecomputeService
+from app.coaching.application.athlete_service import AthleteStateQueryService
+from app.coaching.application.training_analysis_service import TrainingAnalysisService
+from app.coaching.domain.athlete.models import FatigueLevel, RecoveryLevel
+from app.common.clock import FrozenClock
+from app.common.errors import DomainError
+from app.infrastructure.database.models.coaching import AthleteStateSnapshotRow
+from app.infrastructure.database.repositories.coaching import (
+    SqlAlchemyAthleteStateRepository,
+    SqlAlchemyPlanRepository,
+    SqlAlchemyWorkoutRepository,
+)
+from app.infrastructure.database.session import short_session
+from app.infrastructure.seed.vertical_slice import seed_vertical_slice
+
+
+def _recompute_service(
+    sessions: async_sessionmaker[AsyncSession], clock: FrozenClock
+) -> AthleteStateRecomputeService:
+    workouts = SqlAlchemyWorkoutRepository(sessions)
+    return AthleteStateRecomputeService(
+        analysis=TrainingAnalysisService(workouts, SqlAlchemyPlanRepository(sessions)),
+        workouts=workouts,
+        snapshots=SqlAlchemyAthleteStateRepository(sessions),
+        clock=clock,
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertical_slice_recompute_appends_v2_high_fair(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    async with short_session(sessions, commit=True) as session:
+        seed = await seed_vertical_slice(session)
+    service = _recompute_service(sessions, clock)
+    snapshot = await service.recompute(user_id=seed.user_id, as_of=clock.now())
+    assert snapshot.version == 2
+    assert snapshot.algorithm_version == "phase3.v1"
+    assert snapshot.fatigue_level is FatigueLevel.HIGH
+    assert snapshot.recovery_level is RecoveryLevel.FAIR
+    assert snapshot.training_load_coverage is not None
+    assert snapshot.training_load_coverage < 0.5
+    assert snapshot.recent_training_load is None
+    assert snapshot.workout_completion_rate is None
+    assert snapshot.as_of == clock.now()
+
+
+@pytest.mark.asyncio
+async def test_same_as_of_identical_assessment_does_not_insert(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    async with short_session(sessions, commit=True) as session:
+        seed = await seed_vertical_slice(session)
+    service = _recompute_service(sessions, clock)
+    first = await service.recompute(user_id=seed.user_id, as_of=clock.now())
+    second = await service.recompute(user_id=seed.user_id, as_of=clock.now())
+    assert first.id == second.id
+    assert first.version == second.version == 2
+    async with short_session(sessions) as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(AthleteStateSnapshotRow)
+            .where(AthleteStateSnapshotRow.user_id == seed.user_id)
+        )
+    assert count == 2  # fixture V1 + 一次正式 V2
+
+
+@pytest.mark.asyncio
+async def test_as_of_rollback_is_rejected(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    async with short_session(sessions, commit=True) as session:
+        seed = await seed_vertical_slice(session)
+    service = _recompute_service(sessions, clock)
+    await service.recompute(user_id=seed.user_id, as_of=clock.now())
+    with pytest.raises(DomainError, match="as_of_rollback"):
+        await service.recompute(
+            user_id=seed.user_id, as_of=clock.now() - timedelta(days=2)
+        )
+
+
+@pytest.mark.asyncio
+async def test_newer_as_of_appends_monotonic_version(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    async with short_session(sessions, commit=True) as session:
+        seed = await seed_vertical_slice(session)
+    service = _recompute_service(sessions, clock)
+    v2 = await service.recompute(user_id=seed.user_id, as_of=clock.now())
+    v3 = await service.recompute(
+        user_id=seed.user_id, as_of=clock.now() + timedelta(minutes=1)
+    )
+    assert v2.version == 2
+    assert v3.version == 3
+    assert v3.as_of > v2.as_of
+
+
+@pytest.mark.asyncio
+async def test_concurrent_recompute_does_not_lose_versions(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    async with short_session(sessions, commit=True) as session:
+        seed = await seed_vertical_slice(session)
+    service = _recompute_service(sessions, clock)
+    first, second = await asyncio.gather(
+        service.recompute(user_id=seed.user_id, as_of=clock.now()),
+        service.recompute(user_id=seed.user_id, as_of=clock.now()),
+    )
+    assert {first.version, second.version} == {2}
+    assert first.id == second.id
+
+
+@pytest.mark.asyncio
+async def test_query_path_does_not_compute_or_insert(
+    sessions: async_sessionmaker[AsyncSession],
+    user_id,
+) -> None:
+    repo = SqlAlchemyAthleteStateRepository(sessions)
+    query = AthleteStateQueryService(repo)
+    assert await query.get_latest_athlete_state(user_id=user_id) is None
+    async with short_session(sessions) as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(AthleteStateSnapshotRow)
+            .where(AthleteStateSnapshotRow.user_id == user_id)
+        )
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_cross_user_isolation(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    async with short_session(sessions, commit=True) as session:
+        seed_a = await seed_vertical_slice(session)
+        seed_b = await seed_vertical_slice(session)
+    service = _recompute_service(sessions, clock)
+    await service.recompute(user_id=seed_a.user_id, as_of=clock.now())
+    query = AthleteStateQueryService(SqlAlchemyAthleteStateRepository(sessions))
+    latest_b = await query.get_latest_athlete_state(user_id=seed_b.user_id)
+    assert latest_b is not None
+    assert latest_b.version == 1
+    assert latest_b.algorithm_version == "seed-fixture"

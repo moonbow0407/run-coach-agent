@@ -2,28 +2,44 @@
 
 只做取数与 Row -> 领域对象映射，不含业务规则；
 所有查询都强制携带 user_id 条件，这是用户数据隔离的最后一道防线。
+快照追加与计划激活只负责事务、行锁和持久化，不决定疲劳或调整规则。
 """
 
 from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import Select, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.coaching.domain.athlete.evaluator import AthleteStateAssessment
 from app.coaching.domain.athlete.models import AthleteStateSnapshot
 from app.coaching.domain.goal.models import GoalStatus, TrainingGoal
-from app.coaching.domain.plan.models import PlannedSession, PlanStatus, TrainingPlan
+from app.coaching.domain.plan.models import (
+    PlanChange,
+    PlanChangeStatus,
+    PlannedSession,
+    PlanStatus,
+    TrainingPlan,
+)
 from app.coaching.domain.workout.models import Workout, WorkoutFeedback
+from app.common.errors import ConflictError, DomainError, NotFoundError
+from app.common.ids import new_id
+from app.infrastructure.database.locking import lock_user_row
 from app.infrastructure.database.mappers import (
     athlete_state_from_row,
     feedback_from_row,
     goal_from_row,
+    payload_to_json,
+    plan_change_from_row,
     plan_from_row,
     session_from_row,
+    signals_to_json,
     workout_from_row,
 )
 from app.infrastructure.database.models.coaching import (
     AthleteStateSnapshotRow,
+    PlanChangeRow,
     PlannedSessionRow,
     TrainingGoalRow,
     TrainingPlanRow,
@@ -54,6 +70,28 @@ class SqlAlchemyWorkoutRepository:
             rows = (await session.scalars(stmt)).all()
             return [workout_from_row(row) for row in rows]
 
+    async def list_between(
+        self,
+        *,
+        user_id: UUID,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> list[Workout]:
+        stmt: Select[tuple[WorkoutRow]] = (
+            select(WorkoutRow)
+            .where(
+                WorkoutRow.user_id == user_id,
+                WorkoutRow.started_at >= start,
+                WorkoutRow.started_at <= end,
+            )
+            .order_by(WorkoutRow.started_at.asc())
+            .limit(limit)
+        )
+        async with short_session(self._sessions) as session:
+            rows = (await session.scalars(stmt)).all()
+            return [workout_from_row(row) for row in rows]
+
     async def get(self, *, user_id: UUID, workout_id: UUID) -> Workout | None:
         stmt = select(WorkoutRow).where(
             WorkoutRow.id == workout_id,
@@ -76,6 +114,22 @@ class SqlAlchemyWorkoutRepository:
         async with short_session(self._sessions) as session:
             row = await session.scalar(stmt)
             return feedback_from_row(row) if row else None
+
+    async def list_feedback_for_workouts(
+        self,
+        *,
+        user_id: UUID,
+        workout_ids: list[UUID],
+    ) -> list[WorkoutFeedback]:
+        if not workout_ids:
+            return []
+        stmt = select(WorkoutFeedbackRow).where(
+            WorkoutFeedbackRow.user_id == user_id,
+            WorkoutFeedbackRow.workout_id.in_(workout_ids),
+        )
+        async with short_session(self._sessions) as session:
+            rows = (await session.scalars(stmt)).all()
+            return [feedback_from_row(row) for row in rows]
 
 
 class SqlAlchemyGoalRepository:
@@ -100,6 +154,15 @@ class SqlAlchemyPlanRepository:
         stmt = select(TrainingPlanRow).where(
             TrainingPlanRow.user_id == user_id,
             TrainingPlanRow.status == PlanStatus.ACTIVE.value,
+        )
+        async with short_session(self._sessions) as session:
+            row = await session.scalar(stmt)
+            return plan_from_row(row) if row else None
+
+    async def get(self, *, user_id: UUID, plan_id: UUID) -> TrainingPlan | None:
+        stmt = select(TrainingPlanRow).where(
+            TrainingPlanRow.id == plan_id,
+            TrainingPlanRow.user_id == user_id,
         )
         async with short_session(self._sessions) as session:
             row = await session.scalar(stmt)
@@ -139,3 +202,162 @@ class SqlAlchemyAthleteStateRepository:
         async with short_session(self._sessions) as session:
             row = await session.scalar(stmt)
             return athlete_state_from_row(row) if row else None
+
+    async def append_snapshot(
+        self,
+        *,
+        user_id: UUID,
+        as_of: datetime,
+        assessment: AthleteStateAssessment,
+        created_at: datetime,
+    ) -> AthleteStateSnapshot:
+        async with short_session(self._sessions, commit=True) as session:
+            await lock_user_row(session, user_id)
+            latest_row = await session.scalar(
+                select(AthleteStateSnapshotRow)
+                .where(AthleteStateSnapshotRow.user_id == user_id)
+                .order_by(AthleteStateSnapshotRow.version.desc())
+                .limit(1)
+            )
+            if latest_row is None:
+                version = 1
+            else:
+                if as_of < latest_row.as_of:
+                    raise DomainError("as_of_rollback")
+                latest = athlete_state_from_row(latest_row)
+                if as_of == latest.as_of and _assessment_matches(latest, assessment):
+                    return latest
+                version = latest.version + 1
+            row = AthleteStateSnapshotRow(
+                id=new_id(),
+                user_id=user_id,
+                version=version,
+                as_of=as_of,
+                fatigue_level=assessment.fatigue_level.value if assessment.fatigue_level else None,
+                recovery_level=(
+                    assessment.recovery_level.value if assessment.recovery_level else None
+                ),
+                recent_training_load=assessment.recent_training_load,
+                workout_completion_rate=assessment.workout_completion_rate,
+                training_load_coverage=assessment.training_load_coverage,
+                signals=signals_to_json(assessment.signals),
+                confidence=assessment.confidence,
+                algorithm_version=assessment.algorithm_version,
+                created_at=created_at,
+            )
+            session.add(row)
+            await session.flush()
+            return athlete_state_from_row(row)
+
+
+def _assessment_matches(snapshot: AthleteStateSnapshot, assessment: AthleteStateAssessment) -> bool:
+    return (
+        snapshot.algorithm_version == assessment.algorithm_version
+        and snapshot.fatigue_level == assessment.fatigue_level
+        and snapshot.recovery_level == assessment.recovery_level
+        and snapshot.recent_training_load == assessment.recent_training_load
+        and snapshot.workout_completion_rate == assessment.workout_completion_rate
+        and snapshot.training_load_coverage == assessment.training_load_coverage
+        and snapshot.confidence == assessment.confidence
+        and snapshot.signals == assessment.signals
+    )
+
+
+_UNRESOLVED_STATUSES = (
+    PlanChangeStatus.DRAFT.value,
+    PlanChangeStatus.PENDING_CONFIRMATION.value,
+)
+
+
+class SqlAlchemyPlanChangeRepository:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def get(self, *, user_id: UUID, plan_change_id: UUID) -> PlanChange | None:
+        stmt = select(PlanChangeRow).where(
+            PlanChangeRow.id == plan_change_id,
+            PlanChangeRow.user_id == user_id,
+        )
+        async with short_session(self._sessions) as session:
+            row = await session.scalar(stmt)
+            return plan_change_from_row(row) if row else None
+
+    async def get_unresolved(self, *, user_id: UUID) -> PlanChange | None:
+        stmt = (
+            select(PlanChangeRow)
+            .where(
+                PlanChangeRow.user_id == user_id,
+                PlanChangeRow.status.in_(_UNRESOLVED_STATUSES),
+            )
+            .order_by(PlanChangeRow.created_at.desc())
+            .limit(1)
+        )
+        async with short_session(self._sessions) as session:
+            row = await session.scalar(stmt)
+            return plan_change_from_row(row) if row else None
+
+    async def list_by_turn(self, *, user_id: UUID, turn_id: UUID) -> list[PlanChange]:
+        stmt = (
+            select(PlanChangeRow)
+            .where(
+                PlanChangeRow.user_id == user_id,
+                PlanChangeRow.source_turn_id == turn_id,
+            )
+            .order_by(PlanChangeRow.created_at.asc())
+        )
+        async with short_session(self._sessions) as session:
+            rows = (await session.scalars(stmt)).all()
+            return [plan_change_from_row(row) for row in rows]
+
+    async def add(self, plan_change: PlanChange) -> PlanChange:
+        row = PlanChangeRow(
+            id=plan_change.id,
+            user_id=plan_change.user_id,
+            from_plan_id=plan_change.from_plan_id,
+            from_plan_version=plan_change.from_plan_version,
+            based_on_state_id=plan_change.based_on_state_id,
+            based_on_state_version=plan_change.based_on_state_version,
+            source_turn_id=plan_change.source_turn_id,
+            source_run_id=plan_change.source_run_id,
+            as_of=plan_change.as_of,
+            change_type=plan_change.change_type.value,
+            payload=payload_to_json(plan_change.payload),
+            reason=plan_change.reason,
+            status=plan_change.status.value,
+            created_at=plan_change.created_at,
+            resolved_at=plan_change.resolved_at,
+            resulting_plan_id=plan_change.resulting_plan_id,
+        )
+        try:
+            async with short_session(self._sessions, commit=True) as session:
+                session.add(row)
+                await session.flush()
+                return plan_change_from_row(row)
+        except IntegrityError as exc:
+            raise ConflictError("unresolved_plan_change_exists") from exc
+
+    async def update_status(
+        self,
+        *,
+        user_id: UUID,
+        plan_change_id: UUID,
+        status: PlanChangeStatus,
+        resolved_at: datetime | None = None,
+        resulting_plan_id: UUID | None = None,
+    ) -> PlanChange:
+        async with short_session(self._sessions, commit=True) as session:
+            row = await session.scalar(
+                select(PlanChangeRow).where(
+                    PlanChangeRow.id == plan_change_id,
+                    PlanChangeRow.user_id == user_id,
+                )
+            )
+            if row is None:
+                raise NotFoundError("计划调整不存在")
+            row.status = status.value
+            if resolved_at is not None:
+                row.resolved_at = resolved_at
+            if resulting_plan_id is not None:
+                row.resulting_plan_id = resulting_plan_id
+            await session.flush()
+            return plan_change_from_row(row)

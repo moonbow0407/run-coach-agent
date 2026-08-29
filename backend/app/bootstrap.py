@@ -12,7 +12,7 @@
 
 本模块负责把接口与具体实现（SqlAlchemy / OpenAI 兼容 API）“接线”到一起。
 测试可以通过 build_container / create_app 的参数注入替身实现。
-Tool 注册在进程启动时由 Provider 确定性完成（System + Coaching 共七个）。
+Tool 注册在进程启动时由 Provider 确定性完成（System + Coaching 查询 / 分析 / 草案）。
 """
 
 from collections.abc import AsyncIterator
@@ -38,9 +38,13 @@ from app.agent.reasoning.reasoner import Reasoner
 from app.agent.runtime.agent_runtime import AgentRuntime
 from app.api.routes.chat import router as chat_router
 from app.api.routes.health import router as health_router
+from app.api.routes.plan_changes import router as plan_changes_router
+from app.coaching.application.athlete_recompute_service import AthleteStateRecomputeService
 from app.coaching.application.athlete_service import AthleteStateQueryService
 from app.coaching.application.goal_service import GoalQueryService
+from app.coaching.application.plan_adaptation_service import PlanAdaptationService
 from app.coaching.application.plan_service import PlanQueryService
+from app.coaching.application.training_analysis_service import TrainingAnalysisService
 from app.coaching.application.workout_service import WorkoutQueryService
 from app.common.clock import Clock, SystemClock
 from app.common.errors import ReasonerError
@@ -48,6 +52,7 @@ from app.infrastructure.config import Settings
 from app.infrastructure.database.repositories.coaching import (
     SqlAlchemyAthleteStateRepository,
     SqlAlchemyGoalRepository,
+    SqlAlchemyPlanChangeRepository,
     SqlAlchemyPlanRepository,
     SqlAlchemyWorkoutRepository,
 )
@@ -55,8 +60,12 @@ from app.infrastructure.database.repositories.conversation import (
     SqlAlchemyConversationReader,
     SqlAlchemyConversationStore,
 )
+from app.infrastructure.database.repositories.plan_activation import (
+    SqlAlchemyPlanActivationStore,
+)
 from app.infrastructure.database.repositories.trace import SqlAlchemyAgentTraceRecorder
 from app.infrastructure.database.session import create_engine, create_session_factory
+from app.infrastructure.lifecycle.plan_change_listener import PlanChangeLifecycleListener
 from app.infrastructure.llm.provider import OpenAICompatibleProvider
 from app.infrastructure.logging import configure_logging
 from app.tools.builtin.providers import CoachingToolProvider, SystemToolProvider
@@ -80,6 +89,9 @@ class AppContainer:
     reasoner: Reasoner
     tool_runtime: ToolRuntime
     tool_registry: ToolRegistry
+    athlete_recompute_service: AthleteStateRecomputeService
+    plan_adaptation_service: PlanAdaptationService
+    training_analysis_service: TrainingAnalysisService
 
 
 def build_container(
@@ -94,10 +106,30 @@ def build_container(
     sessions = create_session_factory(engine)
     lifecycle = LifecycleDispatcher()
 
-    workout_service = WorkoutQueryService(SqlAlchemyWorkoutRepository(sessions), clock)
+    workout_repo = SqlAlchemyWorkoutRepository(sessions)
+    plan_repo = SqlAlchemyPlanRepository(sessions)
+    athlete_repo = SqlAlchemyAthleteStateRepository(sessions)
+    plan_change_repo = SqlAlchemyPlanChangeRepository(sessions)
+    activation_store = SqlAlchemyPlanActivationStore(sessions)
+    workout_service = WorkoutQueryService(workout_repo, clock)
     goal_service = GoalQueryService(SqlAlchemyGoalRepository(sessions))
-    plan_service = PlanQueryService(SqlAlchemyPlanRepository(sessions))
-    athlete_service = AthleteStateQueryService(SqlAlchemyAthleteStateRepository(sessions))
+    plan_service = PlanQueryService(plan_repo)
+    athlete_service = AthleteStateQueryService(athlete_repo)
+    analysis_service = TrainingAnalysisService(workout_repo, plan_repo)
+    athlete_recompute_service = AthleteStateRecomputeService(
+        analysis=analysis_service,
+        workouts=workout_repo,
+        snapshots=athlete_repo,
+        clock=clock,
+    )
+    plan_adaptation_service = PlanAdaptationService(
+        plans=plan_repo,
+        snapshots=athlete_repo,
+        changes=plan_change_repo,
+        activation=activation_store,
+        clock=clock,
+    )
+    lifecycle.subscribe(PlanChangeLifecycleListener(plan_adaptation_service))
 
     conversation_store = SqlAlchemyConversationStore(sessions, clock)
     conversation_reader = SqlAlchemyConversationReader(sessions)
@@ -111,7 +143,7 @@ def build_container(
     executor = ToolExecutor(registry=registry, resolver=resolver)
     tool_runtime = ToolRuntime(registry=registry, resolver=resolver, executor=executor)
 
-    # 启动时确定性注册：System（search_tools）+ Coaching（六个只读领域工具）。
+    # 启动时确定性注册：System（search_tools）+ Coaching（查询 / 分析 / 草案）。
     for provider in (
         SystemToolProvider(search=search, resolver=resolver),
         CoachingToolProvider(
@@ -119,6 +151,8 @@ def build_container(
             goal_service=goal_service,
             plan_service=plan_service,
             athlete_service=athlete_service,
+            analysis_service=analysis_service,
+            plan_adaptation_service=plan_adaptation_service,
         ),
     ):
         for tool in provider.tools():
@@ -170,6 +204,9 @@ def build_container(
         reasoner=reasoner,
         tool_runtime=tool_runtime,
         tool_registry=registry,
+        athlete_recompute_service=athlete_recompute_service,
+        plan_adaptation_service=plan_adaptation_service,
+        training_analysis_service=analysis_service,
     )
 
 
@@ -206,6 +243,10 @@ def create_app(
     app.state.chat_service = container.chat_service
     app.state.tool_runtime = container.tool_runtime
     app.state.tool_registry = container.tool_registry
+    app.state.athlete_recompute_service = container.athlete_recompute_service
+    app.state.plan_adaptation_service = container.plan_adaptation_service
+    app.state.training_analysis_service = container.training_analysis_service
     app.include_router(health_router)
     app.include_router(chat_router)
+    app.include_router(plan_changes_router)
     return app

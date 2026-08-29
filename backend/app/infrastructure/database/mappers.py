@@ -4,17 +4,33 @@
 字符串字段在这里转成领域枚举，非法值会立即抛错（fail fast）。
 """
 
+from datetime import date
+from typing import Any
+from uuid import UUID
+
 from app.agent.models.message import Message, MessageRole
 from app.agent.models.run import AgentRun, AgentRunStatus
 from app.agent.models.thread import Thread
 from app.agent.models.turn import Turn, TurnStatus
 from app.coaching.domain.athlete.models import AthleteStateSnapshot, FatigueLevel, RecoveryLevel
+from app.coaching.domain.athlete.signals import AthleteStateSignal
 from app.coaching.domain.goal.models import GoalStatus, GoalType, TrainingGoal
-from app.coaching.domain.plan.models import PlannedSession, PlanStatus, SessionType, TrainingPlan
+from app.coaching.domain.plan.models import (
+    PlanChange,
+    PlanChangePayload,
+    PlanChangeStatus,
+    PlanChangeType,
+    PlannedSession,
+    PlanStatus,
+    SessionChange,
+    SessionType,
+    TrainingPlan,
+)
 from app.coaching.domain.workout.models import Workout, WorkoutFeedback, WorkoutSource, WorkoutType
 from app.infrastructure.database.models.agent import AgentRunRow, MessageRow, ThreadRow, TurnRow
 from app.infrastructure.database.models.coaching import (
     AthleteStateSnapshotRow,
+    PlanChangeRow,
     PlannedSessionRow,
     TrainingGoalRow,
     TrainingPlanRow,
@@ -99,10 +115,95 @@ def athlete_state_from_row(row: AthleteStateSnapshotRow) -> AthleteStateSnapshot
         recovery_level=RecoveryLevel(row.recovery_level) if row.recovery_level else None,
         recent_training_load=row.recent_training_load,
         workout_completion_rate=row.workout_completion_rate,
+        training_load_coverage=row.training_load_coverage,
+        signals=_signals_from_json(row.signals),
         confidence=row.confidence,
         algorithm_version=row.algorithm_version,
         created_at=row.created_at,
     )
+
+
+def signals_to_json(signals: tuple[AthleteStateSignal, ...]) -> list[dict[str, Any]]:
+    return [
+        {
+            "code": signal.code,
+            "severity": signal.severity,
+            "message": signal.message,
+            "evidence_refs": list(signal.evidence_refs),
+        }
+        for signal in signals
+    ]
+
+
+def _signals_from_json(raw: list[Any] | None) -> tuple[AthleteStateSignal, ...]:
+    if not raw:
+        return ()
+    return tuple(
+        AthleteStateSignal(
+            code=item["code"],
+            severity=item["severity"],
+            message=item["message"],
+            evidence_refs=tuple(item.get("evidence_refs") or ()),
+        )
+        for item in raw
+    )
+
+
+def plan_change_from_row(row: PlanChangeRow) -> PlanChange:
+    return PlanChange(
+        id=row.id,
+        user_id=row.user_id,
+        from_plan_id=row.from_plan_id,
+        from_plan_version=row.from_plan_version,
+        based_on_state_id=row.based_on_state_id,
+        based_on_state_version=row.based_on_state_version,
+        source_turn_id=row.source_turn_id,
+        source_run_id=row.source_run_id,
+        as_of=row.as_of,
+        change_type=PlanChangeType(row.change_type),
+        payload=payload_from_json(row.payload),
+        reason=row.reason,
+        status=PlanChangeStatus(row.status),
+        created_at=row.created_at,
+        resolved_at=row.resolved_at,
+        resulting_plan_id=row.resulting_plan_id,
+    )
+
+
+def payload_from_json(raw: dict[str, Any]) -> PlanChangePayload:
+    changes = tuple(
+        SessionChange(
+            source_session_id=UUID(item["source_session_id"]),
+            scheduled_date=date.fromisoformat(item["scheduled_date"]),
+            from_type=SessionType(item["from_type"]),
+            to_type=SessionType(item["to_type"]),
+            old_title=item["old_title"],
+            new_title=item["new_title"],
+            old_prescription=dict(item.get("old_prescription") or {}),
+            new_prescription=dict(item.get("new_prescription") or {}),
+        )
+        for item in raw.get("changes") or []
+    )
+    return PlanChangePayload(horizon_days=int(raw["horizon_days"]), changes=changes)
+
+
+def payload_to_json(payload: PlanChangePayload) -> dict[str, Any]:
+    return {
+        "horizon_days": payload.horizon_days,
+        "changes": [
+            {
+                "source_session_id": str(change.source_session_id),
+                "scheduled_date": change.scheduled_date.isoformat(),
+                "from_type": change.from_type.value,
+                "to_type": change.to_type.value,
+                "old_title": change.old_title,
+                "new_title": change.new_title,
+                "old_prescription": change.old_prescription,
+                "new_prescription": change.new_prescription,
+            }
+            for change in payload.changes
+        ],
+    }
 
 
 def thread_from_row(row: ThreadRow) -> Thread:

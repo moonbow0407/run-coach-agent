@@ -21,6 +21,7 @@ node_modules/
 .next/
 
 # 操作系统与编辑器临时文件
+.idea/
 .DS_Store
 Thumbs.db
 *.swp

@@ -12,13 +12,26 @@ class RunCoachError(Exception):
 class DomainError(RunCoachError):
     """违反领域不变量，例如量表越界或非法状态。"""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        # 未单独给 code 时，message 本身就是稳定的领域错误名。
+        self.code = code if code is not None else message
+
 
 class ApplicationError(RunCoachError):
     """应用层可预期失败，例如资源不存在或请求不合法。"""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code if code is not None else message
+
 
 class NotFoundError(ApplicationError):
     pass
+
+
+class ConflictError(ApplicationError):
+    """资源冲突，例如未解决提案已存在或确认时状态已过期。"""
 
 
 class ForbiddenError(ApplicationError):

@@ -1,0 +1,204 @@
+"""PlanActivationStore：在一个事务内完成经过领域校验的计划版本激活。"""
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.coaching.domain.plan.models import PlanChangeStatus, PlanStatus, SessionType
+from app.coaching.domain.plan.validator import validate_reduce_upcoming_load_activation
+from app.coaching.ports.plan_activation_store import PlanActivationResult
+from app.common.errors import ConflictError, DomainError, NotFoundError
+from app.common.ids import new_id
+from app.infrastructure.database.locking import lock_user_row
+from app.infrastructure.database.mappers import (
+    athlete_state_from_row,
+    plan_change_from_row,
+    plan_from_row,
+    session_from_row,
+)
+from app.infrastructure.database.models.coaching import (
+    AthleteStateSnapshotRow,
+    PlanChangeRow,
+    PlannedSessionRow,
+    TrainingPlanRow,
+)
+
+
+class SqlAlchemyPlanActivationStore:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def confirm(
+        self,
+        *,
+        user_id: UUID,
+        plan_change_id: UUID,
+        now: datetime,
+    ) -> PlanActivationResult:
+        # 不能用 short_session(commit=True)：标 STALE 后仍要抛 ConflictError，
+        # 必须先 COMMIT 再抛，否则 rollback 会丢掉 STALE。
+        async with self._sessions() as session:
+            try:
+                await lock_user_row(session, user_id)
+                change_row = await session.scalar(
+                    select(PlanChangeRow).where(
+                        PlanChangeRow.id == plan_change_id,
+                        PlanChangeRow.user_id == user_id,
+                    )
+                )
+                if change_row is None:
+                    raise NotFoundError("计划调整不存在")
+                plan_change = plan_change_from_row(change_row)
+                if plan_change.status is PlanChangeStatus.CONFIRMED:
+                    resulting = await _load_plan_with_sessions(
+                        session, user_id=user_id, plan_id=plan_change.resulting_plan_id
+                    )
+                    await session.commit()
+                    return PlanActivationResult(
+                        plan_change=plan_change,
+                        resulting_plan=resulting[0] if resulting else None,
+                        resulting_sessions=resulting[1] if resulting else (),
+                        already_confirmed=True,
+                    )
+                if plan_change.status is not PlanChangeStatus.PENDING_CONFIRMATION:
+                    raise DomainError("plan_change_not_pending")
+
+                active_row = await session.scalar(
+                    select(TrainingPlanRow).where(
+                        TrainingPlanRow.user_id == user_id,
+                        TrainingPlanRow.status == PlanStatus.ACTIVE.value,
+                    )
+                )
+                latest_state_row = await session.scalar(
+                    select(AthleteStateSnapshotRow)
+                    .where(AthleteStateSnapshotRow.user_id == user_id)
+                    .order_by(AthleteStateSnapshotRow.version.desc())
+                    .limit(1)
+                )
+                if active_row is None or latest_state_row is None:
+                    change_row.status = PlanChangeStatus.STALE.value
+                    change_row.resolved_at = now
+                    await session.commit()
+                    raise ConflictError("stale", code="stale")
+
+                active_plan = plan_from_row(active_row)
+                latest_state = athlete_state_from_row(latest_state_row)
+                fresh = (
+                    active_plan.id == plan_change.from_plan_id
+                    and active_plan.version == plan_change.from_plan_version
+                    and latest_state.id == plan_change.based_on_state_id
+                    and latest_state.version == plan_change.based_on_state_version
+                )
+                if not fresh:
+                    change_row.status = PlanChangeStatus.STALE.value
+                    change_row.resolved_at = now
+                    await session.commit()
+                    raise ConflictError("stale", code="stale")
+
+                session_rows = (
+                    await session.scalars(
+                        select(PlannedSessionRow)
+                        .where(PlannedSessionRow.plan_id == active_plan.id)
+                        .order_by(PlannedSessionRow.scheduled_date.asc())
+                    )
+                ).all()
+                base_sessions = [session_from_row(row) for row in session_rows]
+                validate_reduce_upcoming_load_activation(
+                    user_id=user_id,
+                    plan_change=plan_change,
+                    active_plan=active_plan,
+                    latest_state=latest_state,
+                    base_sessions=base_sessions,
+                )
+
+                replacements = {
+                    change.source_session_id: change for change in plan_change.payload.changes
+                }
+                new_plan_id = new_id()
+                new_plan_row = TrainingPlanRow(
+                    id=new_plan_id,
+                    user_id=user_id,
+                    version=active_plan.version + 1,
+                    goal_id=active_plan.goal_id,
+                    status=PlanStatus.ACTIVE.value,
+                    starts_on=active_plan.starts_on,
+                    ends_on=active_plan.ends_on,
+                    created_at=now,
+                )
+                # 先退出旧 Active，再插入新 Active，避免部分唯一约束冲突。
+                active_row.status = PlanStatus.SUPERSEDED.value
+                await session.flush()
+                session.add(new_plan_row)
+                await session.flush()
+
+                new_session_rows: list[PlannedSessionRow] = []
+                for old in session_rows:
+                    replacement = replacements.get(old.id)
+                    if replacement is None:
+                        new_session_rows.append(
+                            PlannedSessionRow(
+                                id=new_id(),
+                                plan_id=new_plan_id,
+                                scheduled_date=old.scheduled_date,
+                                session_type=old.session_type,
+                                title=old.title,
+                                prescription=dict(old.prescription or {}),
+                            )
+                        )
+                    else:
+                        new_session_rows.append(
+                            PlannedSessionRow(
+                                id=new_id(),
+                                plan_id=new_plan_id,
+                                scheduled_date=replacement.scheduled_date,
+                                session_type=SessionType.REST.value,
+                                title=replacement.new_title,
+                                prescription={},
+                            )
+                        )
+                session.add_all(new_session_rows)
+                await session.flush()
+                change_row.status = PlanChangeStatus.CONFIRMED.value
+                change_row.resolved_at = now
+                change_row.resulting_plan_id = new_plan_id
+                await session.commit()
+                confirmed = plan_change_from_row(change_row)
+                return PlanActivationResult(
+                    plan_change=confirmed,
+                    resulting_plan=plan_from_row(new_plan_row),
+                    resulting_sessions=tuple(session_from_row(row) for row in new_session_rows),
+                    already_confirmed=False,
+                )
+            except ConflictError:
+                raise
+            except Exception:
+                await session.rollback()
+                raise
+
+
+async def _load_plan_with_sessions(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    plan_id: UUID | None,
+) -> tuple | None:
+    if plan_id is None:
+        return None
+    plan_row = await session.scalar(
+        select(TrainingPlanRow).where(
+            TrainingPlanRow.id == plan_id,
+            TrainingPlanRow.user_id == user_id,
+        )
+    )
+    if plan_row is None:
+        return None
+    session_rows = (
+        await session.scalars(
+            select(PlannedSessionRow)
+            .where(PlannedSessionRow.plan_id == plan_id)
+            .order_by(PlannedSessionRow.scheduled_date.asc())
+        )
+    ).all()
+    return plan_from_row(plan_row), tuple(session_from_row(row) for row in session_rows)
