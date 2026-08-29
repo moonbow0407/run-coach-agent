@@ -1,5 +1,6 @@
 """reduce_upcoming_load 与 PlanChangeValidator 的纯领域测试。"""
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
@@ -200,3 +201,164 @@ def test_validator_rejects_race_replacement() -> None:
             latest_state=state,
             base_sessions=[race],
         )
+
+
+def _activation_fixture():
+    """用领域生成器产出一份完全合法的激活输入，供各负例逐一篡改。"""
+    plan_id = new_id()
+    user_id = uuid4()
+    easy = _session(
+        scheduled_date=date(2026, 8, 29),
+        session_type=SessionType.EASY,
+        title="轻松跑",
+        plan_id=plan_id,
+    )
+    tempo = _session(
+        scheduled_date=date(2026, 8, 31),
+        session_type=SessionType.TEMPO,
+        title="节奏跑",
+        plan_id=plan_id,
+    )
+    plan = TrainingPlan(
+        id=plan_id,
+        user_id=user_id,
+        version=1,
+        goal_id=None,
+        status=PlanStatus.ACTIVE,
+        starts_on=date(2026, 7, 20),
+        ends_on=date(2026, 9, 27),
+        created_at=AS_OF,
+    )
+    state = AthleteStateSnapshot(
+        id=new_id(),
+        user_id=user_id,
+        version=2,
+        as_of=AS_OF,
+        fatigue_level=FatigueLevel.HIGH,
+        recovery_level=RecoveryLevel.FAIR,
+        recent_training_load=None,
+        workout_completion_rate=None,
+        training_load_coverage=0.3,
+        signals=(),
+        confidence=0.8,
+        algorithm_version="phase3.v1",
+        created_at=AS_OF,
+    )
+    result = generate_reduce_upcoming_load(
+        as_of=AS_OF,
+        horizon_days=7,
+        sessions=[easy, tempo],
+        fatigue_level=FatigueLevel.HIGH,
+        recovery_level=RecoveryLevel.FAIR,
+    )
+    change = PlanChange(
+        id=new_id(),
+        user_id=user_id,
+        from_plan_id=plan.id,
+        from_plan_version=1,
+        based_on_state_id=state.id,
+        based_on_state_version=2,
+        source_turn_id=new_id(),
+        source_run_id=new_id(),
+        as_of=AS_OF,
+        change_type=PlanChangeType.REDUCE_UPCOMING_LOAD,
+        payload=result.payload,
+        reason="降负荷",
+        status=PlanChangeStatus.PENDING_CONFIRMATION,
+        created_at=AS_OF,
+        resolved_at=None,
+        resulting_plan_id=None,
+    )
+    return change, plan, state, [easy, tempo]
+
+
+def _validate(change, plan, state, sessions) -> None:
+    validate_reduce_upcoming_load_activation(
+        user_id=plan.user_id,
+        plan_change=change,
+        active_plan=plan,
+        latest_state=state,
+        base_sessions=sessions,
+    )
+
+
+def test_validator_accepts_generated_payload() -> None:
+    change, plan, state, sessions = _activation_fixture()
+    _validate(change, plan, state, sessions)
+
+
+def test_validator_rejects_out_of_range_horizon() -> None:
+    change, plan, state, sessions = _activation_fixture()
+    tampered = replace(change, payload=replace(change.payload, horizon_days=365))
+    with pytest.raises(DomainError, match="horizon_days_out_of_range"):
+        _validate(tampered, plan, state, sessions)
+
+
+def test_validator_rejects_empty_changes() -> None:
+    change, plan, state, sessions = _activation_fixture()
+    tampered = replace(change, payload=replace(change.payload, changes=()))
+    with pytest.raises(DomainError, match="empty_plan_change"):
+        _validate(tampered, plan, state, sessions)
+
+
+def test_validator_rejects_duplicate_source_session() -> None:
+    change, plan, state, sessions = _activation_fixture()
+    duplicated = replace(
+        change, payload=replace(change.payload, changes=change.payload.changes * 2)
+    )
+    with pytest.raises(DomainError, match="duplicate_source_session"):
+        _validate(duplicated, plan, state, sessions)
+
+
+def test_validator_rejects_tampered_old_fields() -> None:
+    change, plan, state, sessions = _activation_fixture()
+    first = change.payload.changes[0]
+    tampered_change = replace(first, old_title="被篡改的标题")
+    tampered = replace(
+        change,
+        payload=replace(
+            change.payload, changes=(tampered_change, *change.payload.changes[1:])
+        ),
+    )
+    with pytest.raises(DomainError, match="old_title_mismatch"):
+        _validate(tampered, plan, state, sessions)
+
+    tampered_prescription = replace(
+        first, old_prescription={"pace": "被篡改的处方"}
+    )
+    tampered = replace(
+        change,
+        payload=replace(
+            change.payload, changes=(tampered_prescription, *change.payload.changes[1:])
+        ),
+    )
+    with pytest.raises(DomainError, match="old_prescription_mismatch"):
+        _validate(tampered, plan, state, sessions)
+
+    tampered_new_title = replace(first, new_title="任意标题")
+    tampered = replace(
+        change,
+        payload=replace(
+            change.payload, changes=(tampered_new_title, *change.payload.changes[1:])
+        ),
+    )
+    with pytest.raises(DomainError, match="new_title_mismatch"):
+        _validate(tampered, plan, state, sessions)
+
+
+def test_validator_rejects_session_date_outside_plan_range() -> None:
+    change, plan, state, sessions = _activation_fixture()
+    # 窗口内、但落在 Plan 日期范围之外（ends_on 早于课次日期）。
+    shortened_plan = replace(plan, ends_on=date(2026, 8, 30))
+    with pytest.raises(DomainError, match="session_date_outside_plan_range"):
+        _validate(change, shortened_plan, state, sessions)
+
+
+def test_validator_recheck_safety_precondition() -> None:
+    change, plan, state, sessions = _activation_fixture()
+    # 即使 state id/version 匹配，也要求 state 本身仍满足 v1 前提。
+    moderate_state = replace(
+        state, fatigue_level=FatigueLevel.MODERATE, recovery_level=RecoveryLevel.GOOD
+    )
+    with pytest.raises(DomainError, match="state_does_not_require_v1_reduction"):
+        _validate(change, plan, moderate_state, sessions)

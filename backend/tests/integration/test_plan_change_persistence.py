@@ -14,9 +14,13 @@ from app.coaching.application.plan_adaptation_service import PlanAdaptationServi
 from app.coaching.application.training_analysis_service import TrainingAnalysisService
 from app.coaching.domain.plan.models import PlanChange, PlanChangeStatus, PlanStatus
 from app.common.clock import FrozenClock
-from app.common.errors import ConflictError
+from app.common.errors import ConflictError, DomainError
 from app.common.ids import new_id
-from app.infrastructure.database.models.coaching import PlannedSessionRow, TrainingPlanRow
+from app.infrastructure.database.models.coaching import (
+    PlanChangeRow,
+    PlannedSessionRow,
+    TrainingPlanRow,
+)
 from app.infrastructure.database.repositories.coaching import (
     SqlAlchemyAthleteStateRepository,
     SqlAlchemyPlanChangeRepository,
@@ -391,3 +395,68 @@ async def test_concurrent_confirm_and_reject_reach_consistent_state(
         assert stored.status is PlanChangeStatus.CONFIRMED
         assert active is not None and active.version == 2
         assert stored.resulting_plan_id == active.id
+
+
+def _tamper_horizon(payload: dict) -> dict:
+    return {"horizon_days": 365, "changes": payload["changes"]}
+
+
+def _tamper_empty(payload: dict) -> dict:
+    return {"horizon_days": payload["horizon_days"], "changes": []}
+
+
+def _tamper_duplicate(payload: dict) -> dict:
+    return {**payload, "changes": payload["changes"] * 2}
+
+
+def _tamper_old_title(payload: dict) -> dict:
+    return {
+        **payload,
+        "changes": [{**payload["changes"][0], "old_title": "被篡改的标题"}],
+    }
+
+
+def _tamper_new_prescription(payload: dict) -> dict:
+    return {
+        **payload,
+        "changes": [{**payload["changes"][0], "new_prescription": {"pace": "5:00"}}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutate",
+    [_tamper_horizon, _tamper_empty, _tamper_duplicate, _tamper_old_title, _tamper_new_prescription],
+    ids=["horizon", "empty", "duplicate", "old_title", "new_prescription"],
+)
+async def test_confirm_rejects_tampered_payload_without_activating(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+    mutate,
+) -> None:
+    """直接篡改数据库 payload 后 confirm 必须失败：无 Plan V2、V1 仍 ACTIVE。
+
+    证明 Proposal Validation 与 Activation Validation 是两层独立安全边界。
+    """
+    adaptation, plans, seed, change = await _propose_pending(sessions, clock)
+    async with short_session(sessions, commit=True) as session:
+        row = await session.get(PlanChangeRow, change.id)
+        assert row is not None
+        row.payload = mutate(row.payload)
+
+    with pytest.raises(DomainError):
+        await adaptation.confirm(user_id=seed.user_id, plan_change_id=change.id)
+
+    stored = await adaptation.get(user_id=seed.user_id, plan_change_id=change.id)
+    assert stored.status is PlanChangeStatus.PENDING_CONFIRMATION
+    active = await plans.get_active(user_id=seed.user_id)
+    assert active is not None
+    assert active.id == seed.plan_id
+    assert active.version == 1
+    async with short_session(sessions) as session:
+        versions = (
+            await session.scalars(
+                select(TrainingPlanRow.version).where(TrainingPlanRow.user_id == seed.user_id)
+            )
+        ).all()
+    assert sorted(versions) == [1]
