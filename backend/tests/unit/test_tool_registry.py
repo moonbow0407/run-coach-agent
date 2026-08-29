@@ -48,6 +48,28 @@ def test_unregister_removes_from_search_index() -> None:
     assert search.search("alpha") == []
 
 
+def test_register_index_failure_keeps_registry_unchanged(monkeypatch) -> None:
+    registry, search = _registry()
+
+    def fail_to_add(_document) -> None:
+        raise RuntimeError("index failure")
+
+    monkeypatch.setattr(search, "add", fail_to_add)
+    with pytest.raises(ToolRuntimeError, match="索引注册失败"):
+        registry.register(SampleTool("alpha"))
+    assert registry.find("alpha") is None
+
+
+def test_unregister_detects_missing_index_before_mutation() -> None:
+    registry, search = _registry()
+    registry.register(SampleTool("alpha"))
+    search.remove("alpha")
+
+    with pytest.raises(ToolRuntimeError, match="状态不一致"):
+        registry.unregister("alpha")
+    assert registry.find("alpha") is not None
+
+
 def test_always_on_names_track_registered_tools() -> None:
     registry, _ = _registry()
     registry.register(SampleTool("always", always_on=True))

@@ -17,8 +17,8 @@ from app.agent.context.bundle import (
     GoalView,
     MemoryView,
     MessageView,
-    PlanSummary,
     PlannedSessionView,
+    PlanSummary,
     WorkingContext,
     message_to_view,
 )

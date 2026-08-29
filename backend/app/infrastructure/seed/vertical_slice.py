@@ -5,7 +5,7 @@
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,7 @@ from app.infrastructure.database.models.coaching import (
 )
 from app.infrastructure.database.models.user import UserRow
 
-SLICE_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc)
+SLICE_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 # 固定的 seed 时间基准，使测试断言与具体运行时间无关。
 
 
@@ -68,10 +68,10 @@ async def seed_vertical_slice(
 
     # 最近一周的训练记录：轻松跑 / 节奏跑 / 长距离 / 间歇（最后一次跑崩）。
     workouts = [
-        ("easy", datetime(2026, 8, 20, 6, 0, tzinfo=timezone.utc), 8000.0, 2880, 142, 158),
-        ("tempo", datetime(2026, 8, 22, 6, 0, tzinfo=timezone.utc), 10000.0, 3000, 158, 172),
-        ("long_run", datetime(2026, 8, 24, 6, 0, tzinfo=timezone.utc), 18000.0, 6600, 148, 165),
-        ("interval", datetime(2026, 8, 27, 6, 0, tzinfo=timezone.utc), 8000.0, 2520, 168, 181),
+        ("easy", datetime(2026, 8, 20, 6, 0, tzinfo=UTC), 8000.0, 2880, 142, 158),
+        ("tempo", datetime(2026, 8, 22, 6, 0, tzinfo=UTC), 10000.0, 3000, 158, 172),
+        ("long_run", datetime(2026, 8, 24, 6, 0, tzinfo=UTC), 18000.0, 6600, 148, 165),
+        ("interval", datetime(2026, 8, 27, 6, 0, tzinfo=UTC), 8000.0, 2520, 168, 181),
     ]
     workout_ids: list[UUID] = []
     for workout_type, started_at, distance_m, duration_s, avg_hr, max_hr in workouts:
@@ -103,7 +103,7 @@ async def seed_vertical_slice(
             subjective_fatigue=7,
             soreness=6,
             note="最后两组间歇明显掉速",
-            created_at=datetime(2026, 8, 27, 8, 0, tzinfo=timezone.utc),
+            created_at=datetime(2026, 8, 27, 8, 0, tzinfo=UTC),
         )
     )
 
@@ -149,7 +149,7 @@ async def seed_vertical_slice(
             id=new_id(),
             user_id=user_id,
             version=1,
-            as_of=datetime(2026, 8, 27, 23, 59, tzinfo=timezone.utc),
+            as_of=datetime(2026, 8, 27, 23, 59, tzinfo=UTC),
             fatigue_level="moderate",
             recovery_level="fair",
             recent_training_load=42.0,

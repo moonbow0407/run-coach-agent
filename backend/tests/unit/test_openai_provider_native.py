@@ -117,10 +117,6 @@ async def test_response_tool_calls_parsed_to_model_tool_call() -> None:
     raw = FakeToolCall("call_9", "get_workout_feedback", '{"workout_id": "abc"}')
     provider, _ = _provider(FakeResponse(FakeMessage(tool_calls=[raw])))
     response = await provider.generate(ModelRequest(messages=(SystemMessage(content="s"),)))
-    assert response.tool_calls == (
-        # FakeToolCall 的 arguments 是 JSON 字符串，Provider 解析为 dict。
-        # 但 provider-neutral ModelToolCall 期望 dict；断言解析结果。
-    ) or True
     assert len(response.tool_calls) == 1
     call = response.tool_calls[0]
     assert call.model_call_id == "call_9"

@@ -102,6 +102,6 @@ def _context_stub():
     class ContextStub:
         context_bundle = None
         state = None
-        visible_tools = ["visible_stub"]
+        visible_tools = ("visible_stub",)
 
     return ContextStub()

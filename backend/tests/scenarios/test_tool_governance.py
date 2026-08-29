@@ -265,6 +265,72 @@ async def test_session_run_id_mismatch_fails_agent_run(
     assert "TurnCommitted" not in event_types(events)
     assert any(isinstance(event, TurnFailed) for event in events)
 
+
+@pytest.mark.asyncio
+async def test_tool_runtime_error_from_execution_fails_agent_run(
+    make_app,
+    slice_seed,
+    clock,
+) -> None:
+    """Tool 执行体报告 Runtime 不变量破坏时必须使 AgentRun failed。"""
+    from pydantic import BaseModel, ConfigDict
+
+    from app.tools.context import ToolExecutionContext
+    from app.tools.registry.definition import ToolDefinition, ToolRisk, ToolSource
+
+    class InvariantProbeArgs(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    class InvariantProbeTool:
+        @property
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="invariant_probe",
+                description="仅用于验证 Runtime 不变量错误传播。",
+                tags=("probe",),
+                search_hint="probe",
+                always_on=True,
+                risk=ToolRisk.READ_ONLY,
+                source=ToolSource.SYSTEM,
+                timeout_s=1.0,
+            )
+
+        @property
+        def args_model(self) -> type[InvariantProbeArgs]:
+            return InvariantProbeArgs
+
+        async def execute(
+            self,
+            *,
+            args: InvariantProbeArgs,
+            context: ToolExecutionContext,
+        ) -> object:
+            raise ToolRuntimeError("探测到 Runtime 不变量破坏")
+
+    reasoner = ScriptedReasoner(
+        [
+            ToolCallAction(
+                tool="invariant_probe",
+                arguments={},
+                model_call_id="call-invariant-1",
+            )
+        ]
+    )
+    app = make_app(reasoner=reasoner)
+    app.state.tool_registry.register(InvariantProbeTool())
+    events = record_events(app.state.lifecycle)
+    context = request_context_for(slice_seed.user_id, clock)
+
+    with pytest.raises(ToolRuntimeError, match="Runtime 不变量"):
+        await app.state.chat_service.send_message(
+            request_context=context,
+            thread_id=None,
+            content="触发 Runtime 不变量错误",
+        )
+    assert "TurnCommitted" not in event_types(events)
+    assert any(isinstance(event, TurnFailed) for event in events)
+
+
 @pytest.mark.asyncio
 async def test_tool_timeout_returns_tool_timeout_observation(
     make_app,

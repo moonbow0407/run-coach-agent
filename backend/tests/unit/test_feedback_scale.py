@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -8,7 +8,7 @@ from app.common.errors import DomainError
 
 
 def test_subjective_scale_rejects_out_of_range() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with pytest.raises(DomainError):
         WorkoutFeedback(
             id=uuid4(),

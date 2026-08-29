@@ -79,6 +79,10 @@ class KeywordToolSearch:
             raise KeyError(f"搜索索引中不存在 Tool: {name}")
         del self._documents[name]
 
+    def contains(self, name: str) -> bool:
+        """检查派生索引是否包含 Tool，供 Registry 在修改前验证不变量。"""
+        return name in self._documents
+
     def search(self, query: str) -> list[ToolSearchHit]:
         """按相关性排序返回全部命中（score > 0）。
 

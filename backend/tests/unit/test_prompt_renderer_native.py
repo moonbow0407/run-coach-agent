@@ -1,5 +1,7 @@
 """PromptRenderer 的 native 消息序列还原。"""
 
+from datetime import UTC, datetime
+
 from app.agent.context.bundle import (
     ContextBundle,
     MessageView,
@@ -16,7 +18,6 @@ from app.agent.reasoning.models import (
 )
 from app.agent.reasoning.prompt_renderer import PromptRenderer
 from app.agent.reasoning.state import ReasoningState
-from datetime import UTC, datetime
 from app.tools.resolver.resolver import VisibleTool
 
 

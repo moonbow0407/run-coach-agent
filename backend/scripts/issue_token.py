@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -25,7 +25,7 @@ def main() -> None:
     token = issue_token(
         user_id=user_id,
         secret=settings.jwt_secret,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
         expire_seconds=settings.jwt_expire_seconds,
         algorithm=settings.jwt_algorithm,
     )

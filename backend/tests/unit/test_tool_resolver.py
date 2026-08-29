@@ -41,7 +41,7 @@ def test_unregister_removes_discovered_tool_immediately() -> None:
 
 
 def test_unlock_filters_unregistered_names() -> None:
-    registry, resolver = _setup()
+    registry, _resolver = _setup()
     session = resolver_visible_session(registry)
     added = session.unlock(["hidden_tool", "not_registered"])
     assert added == {"hidden_tool"}

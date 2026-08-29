@@ -2,7 +2,7 @@
 
 测试注入 FrozenClock，避免断言依赖真实墙上时钟。"""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
 
@@ -14,7 +14,7 @@ class Clock(Protocol):
 
 class SystemClock:
     def now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 class FrozenClock:

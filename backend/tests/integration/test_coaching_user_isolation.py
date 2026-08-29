@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -37,7 +37,7 @@ async def test_workouts_are_isolated_by_user(
             WorkoutRow(
                 id=new_id(),
                 user_id=user_a,
-                started_at=datetime(2026, 8, 20, 6, 0, tzinfo=timezone.utc),
+                started_at=datetime(2026, 8, 20, 6, 0, tzinfo=UTC),
                 distance_m=8000,
                 duration_s=2400,
                 avg_heart_rate=140,
@@ -51,7 +51,7 @@ async def test_workouts_are_isolated_by_user(
             WorkoutRow(
                 id=new_id(),
                 user_id=user_b,
-                started_at=datetime(2026, 8, 21, 6, 0, tzinfo=timezone.utc),
+                started_at=datetime(2026, 8, 21, 6, 0, tzinfo=UTC),
                 distance_m=10000,
                 duration_s=3000,
                 avg_heart_rate=150,

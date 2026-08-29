@@ -101,6 +101,9 @@ class ToolExecutor:
             return _error_observation(
                 action, ToolErrorCode.TOOL_TIMEOUT, f"工具执行超时: {name}"
             )
+        except ToolRuntimeError:
+            # Runtime 不变量错误必须使 AgentRun 失败，不能降级为可恢复 Observation。
+            raise
         except RunCoachError as exc:
             # 预期应用异常：消息已归一化，可安全返回给 Reasoner 继续推理。
             return _error_observation(

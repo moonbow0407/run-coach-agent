@@ -16,16 +16,16 @@ from app.infrastructure.database.models.coaching import (
 from app.infrastructure.database.models.user import UserRow
 
 __all__ = [
-    "UserRow",
-    "WorkoutRow",
-    "WorkoutFeedbackRow",
+    "AgentRunRow",
+    "AthleteStateSnapshotRow",
+    "MessageRow",
+    "PlannedSessionRow",
+    "RunStepRow",
+    "ThreadRow",
     "TrainingGoalRow",
     "TrainingPlanRow",
-    "PlannedSessionRow",
-    "AthleteStateSnapshotRow",
-    "ThreadRow",
-    "MessageRow",
     "TurnRow",
-    "AgentRunRow",
-    "RunStepRow",
+    "UserRow",
+    "WorkoutFeedbackRow",
+    "WorkoutRow",
 ]

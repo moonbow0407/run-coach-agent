@@ -44,13 +44,24 @@ class ToolRegistry:
         definition = tool.definition
         if definition.name in self._tools:
             raise ToolRuntimeError(f"Tool 已注册，禁止重复注册: {definition.name}")
-        self._tools[definition.name] = RegisteredTool(
+        if self._search.contains(definition.name):
+            raise ToolRuntimeError(
+                f"Tool Registry 与搜索索引状态不一致: {definition.name} 仅存在于索引"
+            )
+
+        entry = RegisteredTool(
             tool=tool,
             definition=definition,
             args_model=tool.args_model,
             parameters_schema=parameters_schema_of(tool.args_model),
         )
-        self._search.add(document_from_definition(definition))
+        document = document_from_definition(definition)
+        try:
+            # 先更新派生索引；失败时 Registry 尚未变化，不会留下部分注册状态。
+            self._search.add(document)
+        except Exception as exc:
+            raise ToolRuntimeError(f"Tool 搜索索引注册失败: {definition.name}") from exc
+        self._tools[definition.name] = entry
 
     def unregister(self, name: str) -> None:
         """注销一个 Tool。注销不存在的 Tool 明确失败。
@@ -60,8 +71,17 @@ class ToolRegistry:
         """
         if name not in self._tools:
             raise ToolRuntimeError(f"Tool 未注册，无法注销: {name}")
+        if not self._search.contains(name):
+            raise ToolRuntimeError(
+                f"Tool Registry 与搜索索引状态不一致: {name} 缺少索引条目"
+            )
+
+        try:
+            # 先删除派生索引；失败时 executable 仍在 Registry，不产生部分注销。
+            self._search.remove(name)
+        except KeyError as exc:
+            raise ToolRuntimeError(f"Tool 搜索索引注销失败: {name}") from exc
         del self._tools[name]
-        self._search.remove(name)
 
     def find(self, name: str) -> RegisteredTool | None:
         return self._tools.get(name)
