@@ -452,9 +452,10 @@ Memory 描述：
 负责 Agent 可以使用的能力系统：
 
 ```text
+Tool Runtime
 Tool Registry
-Tool Catalog
 Tool Search
+Tool Session
 Tool Resolver
 Tool Executor
 Builtin Tools
@@ -463,7 +464,7 @@ External Tools
 
 Tool 是：
 
-> **可被 Agent 调用的 Domain Capability。**
+> **可被 Agent 调用的领域能力。**
 
 而不是数据库 CRUD 的模型包装。
 
@@ -1298,7 +1299,7 @@ assistant
 禁止把：
 
 ```text
-Capability Call
+Tool Call
 Observation
 Internal Reasoning
 Model Request
@@ -1318,9 +1319,8 @@ Internal Tool State
 包含：
 
 ```text
-CapabilityCallAction
+ToolCallAction
 Observation
-Other Runtime Interaction
 ```
 
 ReasoningState：
@@ -1355,7 +1355,7 @@ AgentRun
 
 ```text
 Reasoning Boundary
-Capability Call
+Tool Call
 Observation
 Final Action
 Timing
@@ -1363,13 +1363,13 @@ Status
 Error
 ```
 
-Capability Call 与 Observation 应通过：
+Tool Call 与 Observation 应通过：
 
 ```text
 call_id
 ```
 
-关联。
+关联。该 `call_id` 是 Runtime 生成的内部 UUID，与模型 native tool calling 协议 ID（`model_call_id`）分离。
 
 Execution Trace 用于：
 
@@ -1463,17 +1463,21 @@ ChatService
      ↓
 Start Turn + AgentRun
      ↓
-ContextAssembler
+ContextAssembler → ContextBundle
      ↓
-Reasoner
+AgentRuntime
+     ↓
+ToolRuntime.create_session
+     ↓
+Reasoner（ContextBundle + ReasoningState + 当前可见 Tool）
      ↓
 Action
      │
      ├── FinalAction
      │
-     └── CapabilityCall
+     └── ToolCallAction
                ↓
-          Tool Runtime
+          ToolRuntime.execute
                ↓
           Observation
                ↓
@@ -1574,10 +1578,10 @@ Retrieved Semantic Memory
 
 Retrieved Episodes
 
-Available Capability Schemas
-
 Current User Input
 ```
+
+`ContextBundle` 不包含 Tool Schema。可见 Tool 不属于 Context Assembly，而由 Tool Runtime 在每轮推理时单独解析。
 
 ---
 
@@ -1590,6 +1594,7 @@ SQL
 Vector Search
 Domain Calculation
 External API
+Tool Registry Lookup
 ```
 
 而依赖 Provider：
@@ -1598,7 +1603,6 @@ External API
 WorkingContextProvider
 ConversationContextProvider
 MemoryContextProvider
-CapabilityContextProvider
 ```
 
 因此：
@@ -1616,6 +1620,8 @@ Provider
 =
 负责如何获取对应数据
 ```
+
+ContextAssembler 不管理 Tool；可见 Tool 不通过 Context Provider 注入。
 
 ---
 
@@ -1653,6 +1659,30 @@ Failed / Cancelled Turn 不得污染正常 committed Conversation Context。
 
 ---
 
+## 25.3 ReasoningContext 与 Tool 可见性
+
+每轮推理的输入是 `ReasoningContext`，由三部分组成：
+
+```text
+稳定的 ContextBundle
++
+当前 AgentRun 的 ReasoningState
++
+当前 ToolResolver 解析出的可见 Tool Definition
+```
+
+可见 Tool 每轮重新计算，规则为当前仍注册的 always-on Tool 与当前仍注册且已在本 AgentRun 内发现的 Tool 的并集。
+
+因此：
+
+```text
+Registered ≠ Visible ≠ Executable
+```
+
+模型猜到但尚未对本 Session 可见的 Tool 不得执行。一次 AgentRun 中发现的 Tool 只属于该 Run 的 ToolSession，不得进入 ContextBundle，也不得污染后续 Turn。
+
+---
+
 # 26. Prompt Rendering
 
 Context Assembly 与 Prompt Rendering 必须分离：
@@ -1663,6 +1693,8 @@ ContextAssembler
 ContextBundle
       +
 ReasoningState
+      +
+Visible Tools
       ↓
 PromptRenderer
       ↓
@@ -1671,11 +1703,13 @@ ModelRequest
 
 ContextAssembler 回答：
 
-> 给模型哪些信息？
+> 给模型哪些稳定上下文？
 
 PromptRenderer 回答：
 
-> 这些信息如何表达给模型？
+> 这些信息以及当前可见 Tool 如何表达给模型？
+
+`ModelRequest` 由 provider-neutral 消息与本轮动态 Tool Definition 组成。Tool Schema 只作为 native tool calling 的 tools 传入，不得写入 system prompt、输出 JSON Contract 或固定 Workflow。供应商协议只存在于 LLM Provider Adapter。
 
 PromptRenderer 不读取：
 
@@ -1683,6 +1717,7 @@ PromptRenderer 不读取：
 ORM
 Repository
 RunStep
+ToolRegistry
 ```
 
 也不保存隐藏 Chain of Thought。
@@ -1715,6 +1750,15 @@ LLMReasoner
 LLMProvider
 ```
 
+Reasoner 接收 `ReasoningContext`，只把模型响应转换为统一 Action：
+
+```text
+ToolCallAction
+FinalAction
+```
+
+供应商 native tool calling 协议封装在 LLM Provider Adapter 内。Reasoner 不访问 Registry、Search、Executor、Application Service 或 Repository。
+
 这样 Runtime 可以使用：
 
 ```text
@@ -1733,15 +1777,31 @@ Future Hybrid Reasoner
 最终 Tool Runtime：
 
 ```text
-Tool Runtime
+ToolRuntime
 │
 ├── Tool
 ├── ToolRegistry
-├── ToolCatalog
-├── ToolSearch
+├── ToolSearch          （Registry 的派生检索状态）
+├── ToolSession         （每个 AgentRun 一份，含 Run-local Discovery）
 ├── ToolResolver
 └── ToolExecutor
 ```
+
+AgentRuntime 只通过 `ToolRuntime` 创建 Session、解析当前可见 Tool 并执行 `ToolCallAction`。Registry、Search、Resolver、Executor 与参数模型的细节不得泄漏进 Reason–Act–Observe 主循环。
+
+系统必须始终区分：
+
+```text
+Registered
+≠
+Visible
+≠
+Executable
+```
+
+- Registered：Tool 存在于 Registry
+- Visible：完整 Schema 当前被提供给 Reasoner
+- Executable：仍在 Registry、当前 Session 可见、参数有效且通过执行治理
 
 ---
 
@@ -1760,39 +1820,36 @@ Metadata
 Schema
 Risk
 Source
+Search Document
 ```
+
+Registry 是 Tool 存在性的唯一事实来源。已经发现但随后注销的 Tool 必须立即从 Resolver 与 Executor 中消失。
 
 ---
 
-## 28.2 Tool Catalog / Search
+## 28.2 Tool Search
 
 回答：
 
-> 当前任务可能需要哪些能力？
+> 当前任务可能需要哪些尚未可见的能力？
 
-Tool 数量增长后，不能无条件将整个工具集塞给模型。
+Tool 数量增长后，不能无条件将整个工具集塞给模型，也不能把全部 Schema 放入 `ContextBundle`。
 
-系统可以根据：
-
-```text
-Task
-Context
-Tags
-Tool Description
-Domain
-```
-
-进行能力搜索。
+Search Index 是 Registry 的派生状态，而不是独立的 Source of Truth。搜索只返回候选名称与简要描述，不能绕过 Resolver 直接执行。长期 Catalog / 语义检索可以在此边界上演进，但不能把 Tool 所有权搬出 Registry。
 
 ---
 
-## 28.3 Tool Resolver
+## 28.3 Tool Resolver 与 ToolSession
 
-负责将候选能力解析成：
+Resolver 负责将当前 Session 解析成：
 
 ```text
 当前 Reasoner 可以看到的 Tool Schema
 ```
+
+每个 AgentRun 创建独立 `ToolSession`，内部持有 `run_id` 与 Run-local Discovery。Discovery 只保存当前 Run 通过搜索获得的 Tool 名称，不写入 Conversation / Memory，也不跨 Turn 复用。AgentRun 结束后 Session 销毁。
+
+可见集合每轮重新计算：当前仍注册的 always-on Tool ∪ 当前仍注册且已发现的 Tool。
 
 ---
 
@@ -1801,9 +1858,11 @@ Domain
 负责：
 
 ```text
+Existence
+Session Visibility
 Authorization
 Argument Validation
-Execution Context
+Trusted ToolExecutionContext
 Execution
 Timeout
 Error Normalization
@@ -1811,9 +1870,11 @@ Result Validation
 Observation
 ```
 
+模型只能提供业务参数。身份、所有权、执行归属与链路追踪字段由 Runtime 注入，不得出现在 Tool 参数模型中。
+
 ---
 
-# 29. Tools Are Domain Capabilities
+# 29. Tools Express Domain Abilities
 
 Tool 应表达领域能力：
 
@@ -1882,8 +1943,10 @@ Runtime 提供：
 
 ```text
 user_id
-run_id
+thread_id
 turn_id
+run_id
+call_id
 request_id
 trace_id
 timestamp
@@ -2066,7 +2129,7 @@ Episodic Retrieval
 ```text
 Working Context
 +
-Domain Capability
+Domain Tools
 ```
 
 提供。
@@ -2413,7 +2476,7 @@ Short-lived Operational State
 ```text
 LLM Call
 External Tool
-Long-running Capability
+Long-running Tool
 ```
 
 一次用户交互应保持短事务。
@@ -2506,7 +2569,7 @@ Runtime 负责：
 
 ```text
 停止 Reasoning
-停止 Capability
+停止正在执行的 Tool
 释放资源
 传播 Cancellation
 ```
@@ -2548,8 +2611,8 @@ ContextAssembled
 ReasoningStarted
 ReasoningCompleted
 
-CapabilityStarted
-CapabilityCompleted
+ToolStarted
+ToolCompleted
 
 TurnCommitStarted
 TurnCommitted
@@ -2585,6 +2648,8 @@ AgentRuntime
       ↓
 直接 send SSE
 ```
+
+Tool 执行进度映射为 `tool.started` / `tool.completed`；不新增 ToolDiscovered 事件，Discovery 以 Tool Call / Observation Trace 为详细记录。ToolRuntime 不直接发送 SSE。
 
 这样未来可以让同一 Lifecycle 同时驱动：
 
@@ -2632,6 +2697,8 @@ Gemini SDK
 ```
 
 模型可以替换，而 Agent Runtime 与 Domain Contract 不应因此重写。
+
+LLMProvider 负责把 provider-neutral 消息与本轮动态 Tool Definition 翻译为供应商 native tool calling 协议。AgentRuntime 与 Reasoner 只认识统一的 `ToolCallAction`、`Observation` 与 `FinalAction`。不支持 native tool calling 的模型配置必须 fail fast，不得退回文本 JSON Action Contract。
 
 ---
 
@@ -2717,7 +2784,7 @@ turn_id
 run_id
 ```
 
-每次 Capability Call additionally 包含：
+每次 Tool Call additionally 包含：
 
 ```text
 call_id
@@ -2729,7 +2796,7 @@ call_id
 Conversation
 Lifecycle
 Reasoning Boundary
-Capability
+Tool
 Observation
 Error
 Latency
@@ -2784,7 +2851,7 @@ HTTP 200
 ```text
 Context
 → Reason
-→ Capability
+→ Tool
 → Observation
 → Decision
 → Side Effect
@@ -2842,7 +2909,6 @@ backend/
 │   │
 │   ├── tools/
 │   │   ├── registry/
-│   │   ├── catalog/
 │   │   ├── search/
 │   │   ├── resolver/
 │   │   ├── executor/
@@ -3073,15 +3139,15 @@ Workout / Feedback
 
 6. **Message 只保存 user / assistant Canonical Conversation。**
 
-7. **Capability Call 与 Observation 属于 Runtime / Trace，不属于普通 Conversation Message。**
+7. **Tool Call 与 Observation 属于 Runtime / Trace，不属于普通 Conversation Message。**
 
-8. **ReasoningState 只属于当前 AgentRun，不保存隐藏 Chain of Thought，也不作为长期 Canonical State。**
+8. **ReasoningState 与 Tool Discovery 只属于当前 AgentRun：不保存隐藏 Chain of Thought，不作为长期 Canonical State，也不跨 Turn 复用。**
 
 9. **AgentRuntime 不通过读取历史 RunStep 驱动正常 Reasoning。**
 
 10. **ChatService 拥有 Conversation 生命周期与事务边界；AgentRuntime 只负责 Context → Reason → Action → Observation → Final。**
 
-11. **ContextAssembler 不直接执行 SQL、Vector Search 或领域计算。**
+11. **ContextAssembler 不直接执行 SQL、Vector Search 或领域计算，也不装配 Tool。可见 Tool 由 Tool Runtime 每轮解析并进入 ReasoningContext，不进入 ContextBundle。**
 
 12. **当前 User Input 在 Context 中只出现一次；Conversation Context 只包含历史 committed Turn。**
 
@@ -3089,7 +3155,7 @@ Workout / Feedback
 
 14. **ToolExecutionContext 与模型生成的 Tool Arguments 必须分离。**
 
-15. **Tool 必须表达 Domain Capability，而不是直接向模型暴露 Repository / SQL / CRUD。**
+15. **Tool 必须表达领域能力，而不是直接向模型暴露 Repository / SQL / CRUD。**
 
 16. **具有副作用的 Tool 必须经过授权、参数校验、状态新鲜度检查和领域规则校验。**
 

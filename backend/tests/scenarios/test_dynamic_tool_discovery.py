@@ -162,36 +162,57 @@ async def test_run_local_isolation(
     slice_seed,
     clock,
 ) -> None:
-    """场景 3：一个 AgentRun 发现的 Tool 不出现在下一 AgentRun 的初始可见集合。"""
-    reasoner_run1 = ScriptedReasoner(
+    """场景 3：同一 app / 同一 ToolRuntime 上的两个 AgentRun，
+    第一个 Run 发现的 Tool 不得泄漏到第二个 Run 的可见或可执行集合。
+
+    必须共用进程内 ToolRuntime：隔离发生在每个 AgentRun 独立的
+    ToolSession 上，而不是靠重建 app / Registry 得到全新基线。
+    """
+    workout_id = slice_seed.workout_ids[-1]
+    # 一个 ScriptedReasoner 跨两次 send_message 消费，避免为换 Reasoner
+    # 再建第二个 app（那会换掉 ToolRuntime，测不到 Run-local Discovery）。
+    reasoner = ScriptedReasoner(
         [
             _tool_call("search_tools", {"query": "训练详情"}, "call-1"),
             FinalAction(content="先找到工具。"),
+            _tool_call(
+                "get_workout_detail",
+                {"workout_id": str(workout_id)},
+                "call-run2-1",
+            ),
+            FinalAction(content="下一个问题。"),
         ]
     )
-    app = make_app(reasoner=reasoner_run1)
-    context = request_context_for(slice_seed.user_id, clock)
-    await app.state.chat_service.send_message(
-        request_context=context,
+    app = make_app(reasoner=reasoner)
+    tool_runtime = app.state.tool_runtime
+    first = await app.state.chat_service.send_message(
+        request_context=request_context_for(slice_seed.user_id, clock),
         thread_id=None,
         content="帮我找训练详情工具",
     )
-    visible_run1 = {tool.name for tool in reasoner_run1.seen_contexts[1].visible_tools}
-    assert "get_workout_detail" in visible_run1
+    visible_run1_after_search = {
+        tool.name for tool in reasoner.seen_contexts[1].visible_tools
+    }
+    assert "get_workout_detail" in visible_run1_after_search
 
-    # 同一 app（同一 Registry / ToolRuntime）内的下一个 AgentRun：
-    # 发现不跨 Run 复用，初始可见集合回到 always-on。
-    reasoner_run2 = ScriptedReasoner([FinalAction(content="下一个问题。")])
-    # ChatService 持有的 runtime 绑定了 reasoner_run1，无法直接替换；
-    # 直接构造第二个 app（同样代表新进程的新 Run 基线）验证隔离语义。
-    app2 = make_app(reasoner=reasoner_run2)
-    await app2.state.chat_service.send_message(
+    # 同一线程的下一 Turn：同一 ToolRuntime，新的 AgentRun / ToolSession。
+    second = await app.state.chat_service.send_message(
         request_context=request_context_for(slice_seed.user_id, clock),
-        thread_id=None,
+        thread_id=first.thread_id,
         content="再问一个",
     )
-    visible_run2 = {tool.name for tool in reasoner_run2.seen_contexts[0].visible_tools}
-    assert visible_run2 == {"search_tools", "get_recent_workouts"}
+    assert app.state.tool_runtime is tool_runtime
+    assert first.run_id != second.run_id
+
+    visible_run2_initial = {
+        tool.name for tool in reasoner.seen_contexts[2].visible_tools
+    }
+    assert visible_run2_initial == {"search_tools", "get_recent_workouts"}
+
+    # 可执行性同样隔离：猜测上一 Run 已发现的 Tool 得到 tool_not_available。
+    guess_observation = reasoner.seen_contexts[3].state.interactions[1]
+    assert guess_observation.status == "error"
+    assert guess_observation.error_code == "tool_not_available"
 
 
 @pytest.mark.asyncio
