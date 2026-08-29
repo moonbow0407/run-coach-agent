@@ -105,6 +105,62 @@ def test_unknown_when_no_feedback() -> None:
     assert any(signal.code == "insufficient_recent_feedback" for signal in assessment.signals)
 
 
+def test_feedback_created_after_as_of_is_ignored() -> None:
+    """情况 A：as_of 之后才报告的反馈不允许污染历史快照。
+
+    Workout 在 as_of 之前、反馈在 as_of 之后创建——若按 workout.started_at
+    锚定 recency，这条未来反馈会被错误地计入。
+    """
+    workout = make_workout(
+        started_at=AS_OF - timedelta(days=1), workout_type=WorkoutType.INTERVAL
+    )
+    future_feedback = make_feedback(
+        workout_id=workout.id,
+        subjective_fatigue=9,
+        soreness=9,
+        perceived_exertion=9,
+        created_at=AS_OF + timedelta(days=2),
+    )
+    analysis = analyze_training_load(
+        as_of=AS_OF,
+        workouts=[workout],
+        feedback_by_workout_id={},
+    )
+    assessment = AthleteStateEvaluatorV1().evaluate(
+        AthleteStateEvidence(
+            as_of=AS_OF,
+            recent_workouts=(workout,),
+            recent_feedback=(future_feedback,),
+            training_load_analysis=analysis,
+        )
+    )
+    assert assessment.fatigue_level is None
+    assert assessment.recovery_level is None
+    assert any(
+        signal.code == "insufficient_recent_feedback" for signal in assessment.signals
+    )
+
+
+def test_late_reported_feedback_uses_created_at_for_recency() -> None:
+    """情况 B：训练发生在 4 天前、反馈今天才补报，仍属于"最近 72 小时反馈"。"""
+    workout = make_workout(
+        started_at=AS_OF - timedelta(days=4), workout_type=WorkoutType.EASY
+    )
+    feedback = make_feedback(
+        workout_id=workout.id,
+        subjective_fatigue=6,
+        soreness=6,
+        perceived_exertion=5,
+        created_at=AS_OF - timedelta(hours=1),
+    )
+    assessment = _evaluate([workout], [feedback])
+    assert assessment.fatigue_level is FatigueLevel.MODERATE
+    assert assessment.recovery_level is RecoveryLevel.FAIR
+    assert any(
+        signal.code == "moderate_subjective_fatigue" for signal in assessment.signals
+    )
+
+
 def test_quality_session_does_not_force_poor_recovery() -> None:
     workout = make_workout(
         started_at=AS_OF - timedelta(hours=10), workout_type=WorkoutType.INTERVAL

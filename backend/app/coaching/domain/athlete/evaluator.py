@@ -58,9 +58,14 @@ class AthleteStateEvaluatorV1:
             workout for workout in evidence.recent_workouts if workout.started_at <= as_of
         )
         workouts_by_id = {workout.id: workout for workout in workouts}
+        # 防御性上界：即使仓储漏掉 created_at 过滤，未来报告也进不了评估。
+        feedbacks = tuple(
+            feedback
+            for feedback in evidence.recent_feedback
+            if feedback.created_at <= as_of
+        )
         feedback_72h = _feedback_in_window(
-            evidence.recent_feedback,
-            workouts_by_id,
+            feedbacks,
             start=as_of - _FATIGUE_LOOKBACK,
             as_of=as_of,
         )
@@ -89,18 +94,18 @@ class AthleteStateEvaluatorV1:
 
 def _feedback_in_window(
     feedbacks: Sequence[WorkoutFeedback],
-    workouts_by_id: dict,
     *,
     start: datetime,
     as_of: datetime,
 ) -> tuple[WorkoutFeedback, ...]:
-    matched: list[WorkoutFeedback] = []
-    for feedback in feedbacks:
-        workout = workouts_by_id.get(feedback.workout_id)
-        evidence_time = workout.started_at if workout is not None else feedback.created_at
-        if start <= evidence_time <= as_of:
-            matched.append(feedback)
-    return tuple(matched)
+    """疲劳 / 恢复的 recency 语义：反馈在 start <= created_at <= as_of 内才算"最近"。
+
+    用户"什么时候报告"才是主观状态的时间锚点；训练发生在哪天只决定
+    该反馈关联的 workout 类型（HIGH 规则里的 quality 课判断），不决定 recency。
+    """
+    return tuple(
+        feedback for feedback in feedbacks if start <= feedback.created_at <= as_of
+    )
 
 
 def _fatigue_level(

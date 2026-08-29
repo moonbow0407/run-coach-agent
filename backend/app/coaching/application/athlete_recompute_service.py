@@ -48,6 +48,7 @@ class AthleteStateRecomputeService:
         feedback = await self._workouts.list_feedback_for_workouts(
             user_id=user_id,
             workout_ids=[workout.id for workout in workouts],
+            end=moment,
         )
         assessment = self._evaluator.evaluate(
             AthleteStateEvidence(

@@ -40,7 +40,13 @@ def analyze_training_load(
     workouts: Sequence[Workout],
     feedback_by_workout_id: Mapping[UUID, WorkoutFeedback],
 ) -> TrainingLoadAnalysis:
-    """按 as_of 切分当前 7 日窗与前一个 7 日窗。未来证据不进入计算。"""
+    """按 as_of 切分当前 7 日窗与前一个 7 日窗。未来证据不进入计算。
+
+    时间语义：负荷归属于 workout.started_at（训练发生在哪天），
+    但 feedback_by_workout_id 必须只包含 as_of 时点有效的反馈
+    （created_at <= as_of；同一 workout 多条时取该时点最新一条），
+    由调用方保证，未来创建的反馈不允许参与负荷计算。
+    """
     current_start = as_of - timedelta(days=CURRENT_WINDOW_DAYS)
     previous_start = as_of - timedelta(days=CURRENT_WINDOW_DAYS + PREVIOUS_WINDOW_DAYS)
     in_scope = [workout for workout in workouts if workout.started_at <= as_of]

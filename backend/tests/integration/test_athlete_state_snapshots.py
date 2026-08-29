@@ -13,6 +13,7 @@ from app.coaching.application.training_analysis_service import TrainingAnalysisS
 from app.coaching.domain.athlete.models import FatigueLevel, RecoveryLevel
 from app.common.clock import FrozenClock
 from app.common.errors import DomainError
+from app.common.ids import new_id
 from app.infrastructure.database.models.coaching import AthleteStateSnapshotRow
 from app.infrastructure.database.repositories.coaching import (
     SqlAlchemyAthleteStateRepository,
@@ -53,6 +54,60 @@ async def test_vertical_slice_recompute_appends_v2_high_fair(
     assert snapshot.recent_training_load is None
     assert snapshot.workout_completion_rate is None
     assert snapshot.as_of == clock.now()
+
+
+@pytest.mark.asyncio
+async def test_recompute_ignores_feedback_created_after_as_of(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    """情况 A 端到端：as_of 之后补报的高疲劳反馈不得进入历史快照。"""
+    from datetime import UTC, datetime
+
+    from app.infrastructure.database.models.coaching import (
+        WorkoutFeedbackRow,
+        WorkoutRow,
+    )
+    from app.infrastructure.database.models.user import UserRow
+
+    user_id = new_id()
+    workout_id = new_id()
+    async with short_session(sessions, commit=True) as session:
+        session.add(UserRow(id=user_id, created_at=clock.now(), updated_at=clock.now()))
+        await session.flush()
+        session.add(
+            WorkoutRow(
+                id=workout_id,
+                user_id=user_id,
+                started_at=datetime(2026, 8, 27, 6, 0, tzinfo=UTC),
+                distance_m=8000,
+                duration_s=2520,
+                avg_heart_rate=168,
+                max_heart_rate=181,
+                workout_type="interval",
+                source="manual",
+                created_at=clock.now(),
+            )
+        )
+        await session.flush()
+        session.add(
+            WorkoutFeedbackRow(
+                id=new_id(),
+                user_id=user_id,
+                workout_id=workout_id,
+                perceived_exertion=10,
+                subjective_fatigue=10,
+                soreness=10,
+                note="as_of 之后才补报",
+                created_at=clock.now() + timedelta(days=2),
+            )
+        )
+    service = _recompute_service(sessions, clock)
+    snapshot = await service.recompute(user_id=user_id, as_of=clock.now())
+    # 若未来反馈泄漏进评估，fatigue=10 会把结果推成 HIGH；正确行为是 UNKNOWN。
+    assert snapshot.fatigue_level is None
+    codes = {signal.code for signal in snapshot.signals}
+    assert "insufficient_recent_feedback" in codes
 
 
 @pytest.mark.asyncio

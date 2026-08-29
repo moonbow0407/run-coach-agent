@@ -47,6 +47,12 @@ class WorkoutRepository(Protocol):
         *,
         user_id: UUID,
         workout_ids: list[UUID],
+        end: datetime,
     ) -> list[WorkoutFeedback]:
-        """批量读取 Feedback，避免按 workout 逐条查询。"""
+        """批量读取 Feedback，避免按 workout 逐条查询。
+
+        end 是证据时间上界：created_at > end 的反馈不得进入任何状态计算，
+        否则未来报告会污染历史快照。结果按 created_at 升序返回，
+        同一 workout 存在多条反馈时，遍历顺序即"从旧到新"。
+        """
         ...

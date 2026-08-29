@@ -169,7 +169,7 @@ async def test_analysis_service_does_not_call_get_feedback_per_workout() -> None
         async def get_feedback(self, *, user_id, workout_id):
             self.get_feedback_calls += 1
 
-        async def list_feedback_for_workouts(self, *, user_id, workout_ids):
+        async def list_feedback_for_workouts(self, *, user_id, workout_ids, end):
             self.batch_calls += 1
             return []
 
@@ -194,3 +194,52 @@ async def test_analysis_service_does_not_call_get_feedback_per_workout() -> None
     await service.analyze_training_load(user_id=fake.workouts[0].user_id, as_of=AS_OF)
     assert fake.get_feedback_calls == 0
     assert fake.batch_calls == 1
+
+
+async def test_analysis_service_takes_latest_feedback_per_workout() -> None:
+    """同一 workout 多条反馈：负荷取 as_of 时点最新一条，结果可复现。"""
+    from app.coaching.application.training_analysis_service import TrainingAnalysisService
+
+    workout = make_workout(started_at=AS_OF - timedelta(days=1), duration_s=1800)
+
+    class FakeWorkouts:
+        def __init__(self) -> None:
+            self.seen_end = None
+
+        async def list_between(self, *, user_id, start, end, limit):
+            return [workout]
+
+        async def get_feedback(self, *, user_id, workout_id):
+            raise AssertionError("不允许逐条查询")
+
+        async def list_feedback_for_workouts(self, *, user_id, workout_ids, end):
+            self.seen_end = end
+            return [
+                make_feedback(workout_id=workout.id, perceived_exertion=3, created_at=AS_OF - timedelta(hours=20)),
+                make_feedback(workout_id=workout.id, perceived_exertion=9, created_at=AS_OF - timedelta(hours=2)),
+            ]
+
+        async def get(self, *, user_id, workout_id):
+            return None
+
+        async def list_recent(self, *, user_id, since, limit):
+            return []
+
+    class FakePlans:
+        async def get_active(self, *, user_id):
+            return None
+
+        async def get(self, *, user_id, plan_id):
+            return None
+
+        async def list_sessions(self, *, user_id, plan_id):
+            return []
+
+    fake = FakeWorkouts()
+    service = TrainingAnalysisService(fake, FakePlans())
+    analysis = await service.analyze_training_load(
+        user_id=workout.user_id, as_of=AS_OF
+    )
+    # 30 分钟 × RPE 9 = 270.0；若取旧反馈会是 90.0。
+    assert analysis.current.srpe_load_sum == 270.0
+    assert fake.seen_end == AS_OF

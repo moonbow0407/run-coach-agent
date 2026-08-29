@@ -129,10 +129,81 @@ async def test_list_feedback_for_workouts_is_batched(
             )
     repo = SqlAlchemyWorkoutRepository(sessions)
     feedbacks = await repo.list_feedback_for_workouts(
-        user_id=user_id, workout_ids=workout_ids
+        user_id=user_id, workout_ids=workout_ids, end=AS_OF
     )
     assert len(feedbacks) == 3
     assert {item.workout_id for item in feedbacks} == set(workout_ids)
+
+
+@pytest.mark.asyncio
+async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    """created_at > end 的反馈被排除；同一 workout 多条按 created_at 升序。"""
+    user_id = await _user(sessions, clock.now())
+    workout_id = new_id()
+    late = new_id()
+    early = new_id()
+    async with short_session(sessions, commit=True) as session:
+        session.add(
+            WorkoutRow(
+                id=workout_id,
+                user_id=user_id,
+                started_at=AS_OF - timedelta(days=2),
+                distance_m=5000,
+                duration_s=1500,
+                avg_heart_rate=140,
+                max_heart_rate=150,
+                workout_type="easy",
+                source="manual",
+                created_at=clock.now(),
+            )
+        )
+        await session.flush()
+        session.add(
+            WorkoutFeedbackRow(
+                id=early,
+                user_id=user_id,
+                workout_id=workout_id,
+                perceived_exertion=4,
+                subjective_fatigue=3,
+                soreness=3,
+                note=None,
+                created_at=AS_OF - timedelta(hours=30),
+            )
+        )
+        session.add(
+            WorkoutFeedbackRow(
+                id=late,
+                user_id=user_id,
+                workout_id=workout_id,
+                perceived_exertion=9,
+                subjective_fatigue=9,
+                soreness=9,
+                note=None,
+                created_at=AS_OF - timedelta(hours=1),
+            )
+        )
+        # as_of 之后才补报的反馈：情况 A 的时间穿越源头。
+        session.add(
+            WorkoutFeedbackRow(
+                id=new_id(),
+                user_id=user_id,
+                workout_id=workout_id,
+                perceived_exertion=10,
+                subjective_fatigue=10,
+                soreness=10,
+                note=None,
+                created_at=AS_OF + timedelta(hours=1),
+            )
+        )
+    repo = SqlAlchemyWorkoutRepository(sessions)
+    feedbacks = await repo.list_feedback_for_workouts(
+        user_id=user_id, workout_ids=[workout_id], end=AS_OF
+    )
+    assert [item.id for item in feedbacks] == [early, late]
+    assert all(item.created_at <= AS_OF for item in feedbacks)
 
 
 @pytest.mark.asyncio
