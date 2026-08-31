@@ -12,7 +12,6 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.coaching.domain.athlete.evaluator import AthleteStateAssessment
 from app.coaching.domain.athlete.models import AthleteStateSnapshot
 from app.coaching.domain.goal.models import GoalStatus, TrainingGoal
 from app.coaching.domain.plan.models import (
@@ -23,8 +22,7 @@ from app.coaching.domain.plan.models import (
     TrainingPlan,
 )
 from app.coaching.domain.workout.models import Workout, WorkoutFeedback
-from app.common.errors import ConflictError, DomainError, NotFoundError
-from app.common.ids import new_id
+from app.common.errors import ConflictError, NotFoundError
 from app.infrastructure.database.locking import lock_user_row
 from app.infrastructure.database.mappers import (
     athlete_state_from_row,
@@ -34,7 +32,6 @@ from app.infrastructure.database.mappers import (
     plan_change_from_row,
     plan_from_row,
     session_from_row,
-    signals_to_json,
     workout_from_row,
 )
 from app.infrastructure.database.models.coaching import (
@@ -210,65 +207,6 @@ class SqlAlchemyAthleteStateRepository:
         async with short_session(self._sessions) as session:
             row = await session.scalar(stmt)
             return athlete_state_from_row(row) if row else None
-
-    async def append_snapshot(
-        self,
-        *,
-        user_id: UUID,
-        as_of: datetime,
-        assessment: AthleteStateAssessment,
-        created_at: datetime,
-    ) -> AthleteStateSnapshot:
-        async with short_session(self._sessions, commit=True) as session:
-            await lock_user_row(session, user_id)
-            latest_row = await session.scalar(
-                select(AthleteStateSnapshotRow)
-                .where(AthleteStateSnapshotRow.user_id == user_id)
-                .order_by(AthleteStateSnapshotRow.version.desc())
-                .limit(1)
-            )
-            if latest_row is None:
-                version = 1
-            else:
-                if as_of < latest_row.as_of:
-                    raise DomainError("as_of_rollback")
-                latest = athlete_state_from_row(latest_row)
-                if as_of == latest.as_of and _assessment_matches(latest, assessment):
-                    return latest
-                version = latest.version + 1
-            row = AthleteStateSnapshotRow(
-                id=new_id(),
-                user_id=user_id,
-                version=version,
-                as_of=as_of,
-                fatigue_level=assessment.fatigue_level.value if assessment.fatigue_level else None,
-                recovery_level=(
-                    assessment.recovery_level.value if assessment.recovery_level else None
-                ),
-                recent_training_load=assessment.recent_training_load,
-                workout_completion_rate=assessment.workout_completion_rate,
-                training_load_coverage=assessment.training_load_coverage,
-                signals=signals_to_json(assessment.signals),
-                confidence=assessment.confidence,
-                algorithm_version=assessment.algorithm_version,
-                created_at=created_at,
-            )
-            session.add(row)
-            await session.flush()
-            return athlete_state_from_row(row)
-
-
-def _assessment_matches(snapshot: AthleteStateSnapshot, assessment: AthleteStateAssessment) -> bool:
-    return (
-        snapshot.algorithm_version == assessment.algorithm_version
-        and snapshot.fatigue_level == assessment.fatigue_level
-        and snapshot.recovery_level == assessment.recovery_level
-        and snapshot.recent_training_load == assessment.recent_training_load
-        and snapshot.workout_completion_rate == assessment.workout_completion_rate
-        and snapshot.training_load_coverage == assessment.training_load_coverage
-        and snapshot.confidence == assessment.confidence
-        and snapshot.signals == assessment.signals
-    )
 
 
 _UNRESOLVED_STATUSES = (

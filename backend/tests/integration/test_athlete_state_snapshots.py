@@ -9,29 +9,30 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.coaching.application.athlete_recompute_service import AthleteStateRecomputeService
 from app.coaching.application.athlete_service import AthleteStateQueryService
-from app.coaching.application.training_analysis_service import TrainingAnalysisService
+from app.coaching.contracts.durable_events import ATHLETE_STATE_RECOMPUTED_V1
 from app.coaching.domain.athlete.models import FatigueLevel, RecoveryLevel
 from app.common.clock import FrozenClock
-from app.common.errors import DomainError
 from app.common.ids import new_id
 from app.infrastructure.database.models.coaching import AthleteStateSnapshotRow
+from app.infrastructure.database.models.outbox import OutboxEventRow
+from app.infrastructure.database.repositories.athlete_recompute import (
+    SqlAlchemyAthleteStateRecomputeUnitOfWork,
+)
 from app.infrastructure.database.repositories.coaching import (
     SqlAlchemyAthleteStateRepository,
-    SqlAlchemyPlanRepository,
-    SqlAlchemyWorkoutRepository,
 )
 from app.infrastructure.database.session import short_session
+from app.infrastructure.outbox.writer import OutboxWriter
 from app.infrastructure.seed.vertical_slice import seed_vertical_slice
 
 
 def _recompute_service(
     sessions: async_sessionmaker[AsyncSession], clock: FrozenClock
 ) -> AthleteStateRecomputeService:
-    workouts = SqlAlchemyWorkoutRepository(sessions)
     return AthleteStateRecomputeService(
-        analysis=TrainingAnalysisService(workouts, SqlAlchemyPlanRepository(sessions)),
-        workouts=workouts,
-        snapshots=SqlAlchemyAthleteStateRepository(sessions),
+        unit_of_work=SqlAlchemyAthleteStateRecomputeUnitOfWork(
+            sessions, OutboxWriter()
+        ),
         clock=clock,
     )
 
@@ -54,6 +55,16 @@ async def test_vertical_slice_recompute_appends_v2_high_fair(
     assert snapshot.recent_training_load is None
     assert snapshot.workout_completion_rate is None
     assert snapshot.as_of == clock.now()
+    async with short_session(sessions) as session:
+        event = await session.scalar(
+            select(OutboxEventRow).where(
+                OutboxEventRow.event_type == ATHLETE_STATE_RECOMPUTED_V1,
+                OutboxEventRow.aggregate_id == snapshot.id,
+            )
+        )
+    assert event is not None
+    assert event.user_id == seed.user_id
+    assert event.payload["snapshot_version"] == 2
 
 
 @pytest.mark.asyncio
@@ -130,22 +141,32 @@ async def test_same_as_of_identical_assessment_does_not_insert(
             .select_from(AthleteStateSnapshotRow)
             .where(AthleteStateSnapshotRow.user_id == seed.user_id)
         )
+        event_count = await session.scalar(
+            select(func.count())
+            .select_from(OutboxEventRow)
+            .where(
+                OutboxEventRow.user_id == seed.user_id,
+                OutboxEventRow.event_type == ATHLETE_STATE_RECOMPUTED_V1,
+            )
+        )
     assert count == 2  # fixture V1 + 一次正式 V2
+    assert event_count == 1
 
 
 @pytest.mark.asyncio
-async def test_as_of_rollback_is_rejected(
+async def test_older_trigger_is_obsolete_noop(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     service = _recompute_service(sessions, clock)
-    await service.recompute(user_id=seed.user_id, as_of=clock.now())
-    with pytest.raises(DomainError, match="as_of_rollback"):
-        await service.recompute(
-            user_id=seed.user_id, as_of=clock.now() - timedelta(days=2)
-        )
+    current = await service.recompute(user_id=seed.user_id, as_of=clock.now())
+    obsolete = await service.recompute(
+        user_id=seed.user_id, as_of=clock.now() - timedelta(days=2)
+    )
+    assert obsolete.id == current.id
+    assert obsolete.version == current.version
 
 
 @pytest.mark.asyncio

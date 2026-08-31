@@ -10,6 +10,14 @@ from uuid import UUID
 from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.contracts.durable_events import (
+    TURN_CANCELLED_V1,
+    TURN_FAILED_V1,
+    TurnCommittedV1,
+    TurnTerminalV1,
+    new_turn_committed_event,
+    new_turn_terminal_event,
+)
 from app.agent.models.message import Message, MessageRole
 from app.agent.models.run import AgentRunStatus
 from app.agent.models.thread import Thread
@@ -18,6 +26,7 @@ from app.agent.ports.conversation_reader import CommittedTurnMessages
 from app.agent.ports.conversation_store import CommittedTurn, StartedTurn
 from app.common.clock import Clock
 from app.common.errors import ForbiddenError, NotFoundError
+from app.common.events import EventMetadata
 from app.common.ids import new_id
 from app.infrastructure.database.mappers import (
     message_from_row,
@@ -27,14 +36,21 @@ from app.infrastructure.database.mappers import (
 )
 from app.infrastructure.database.models.agent import AgentRunRow, MessageRow, ThreadRow, TurnRow
 from app.infrastructure.database.session import short_session
+from app.infrastructure.outbox.writer import OutboxWriter
 
 
 class SqlAlchemyConversationStore:
     """ConversationStore 端口的 SQL 实现；写路径按短事务组织。"""
 
-    def __init__(self, sessions: async_sessionmaker[AsyncSession], clock: Clock) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        clock: Clock,
+        outbox: OutboxWriter,
+    ) -> None:
         self._sessions = sessions
         self._clock = clock
+        self._outbox = outbox
 
     async def start_turn(
         self,
@@ -116,6 +132,7 @@ class SqlAlchemyConversationStore:
         user_id: UUID,
         turn_id: UUID,
         assistant_content: str,
+        event_metadata: EventMetadata,
     ) -> CommittedTurn:
         """事务 B：写入助手消息，Turn -> committed、AgentRun -> completed。"""
         now = self._clock.now()
@@ -144,6 +161,21 @@ class SqlAlchemyConversationStore:
             run_row.status = AgentRunStatus.COMPLETED.value
             run_row.completed_at = now
             thread_row.updated_at = now
+            self._outbox.add(
+                session,
+                new_turn_committed_event(
+                    user_id=user_id,
+                    payload=TurnCommittedV1(
+                        turn_id=turn_row.id,
+                        thread_id=turn_row.thread_id,
+                        user_message_id=turn_row.user_message_id,
+                        assistant_message_id=assistant_id,
+                        run_id=run_row.id,
+                        committed_at=now,
+                    ),
+                    metadata=event_metadata,
+                ),
+            )
             await session.flush()
 
             return CommittedTurn(
@@ -153,22 +185,30 @@ class SqlAlchemyConversationStore:
                 run=run_from_row(run_row),
             )
 
-    async def fail_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
+    async def fail_turn(
+        self, *, user_id: UUID, turn_id: UUID, event_metadata: EventMetadata
+    ) -> None:
         """把仍处于打开状态的 Turn / AgentRun 置为 failed。"""
         await self._finish_unsuccessfully(
             user_id=user_id,
             turn_id=turn_id,
             turn_status=TurnStatus.FAILED,
             run_status=AgentRunStatus.FAILED,
+            event_type=TURN_FAILED_V1,
+            event_metadata=event_metadata,
         )
 
-    async def cancel_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
+    async def cancel_turn(
+        self, *, user_id: UUID, turn_id: UUID, event_metadata: EventMetadata
+    ) -> None:
         """把仍处于打开状态的 Turn / AgentRun 置为 cancelled。"""
         await self._finish_unsuccessfully(
             user_id=user_id,
             turn_id=turn_id,
             turn_status=TurnStatus.CANCELLED,
             run_status=AgentRunStatus.CANCELLED,
+            event_type=TURN_CANCELLED_V1,
+            event_metadata=event_metadata,
         )
 
     async def _finish_unsuccessfully(
@@ -178,6 +218,8 @@ class SqlAlchemyConversationStore:
         turn_id: UUID,
         turn_status: TurnStatus,
         run_status: AgentRunStatus,
+        event_type: str,
+        event_metadata: EventMetadata,
     ) -> None:
         now = self._clock.now()
         async with short_session(self._sessions, commit=True) as session:
@@ -190,6 +232,20 @@ class SqlAlchemyConversationStore:
             run_row.status = run_status.value
             run_row.completed_at = now
             thread_row.updated_at = now
+            self._outbox.add(
+                session,
+                new_turn_terminal_event(
+                    event_type=event_type,
+                    user_id=user_id,
+                    payload=TurnTerminalV1(
+                        turn_id=turn_row.id,
+                        thread_id=turn_row.thread_id,
+                        run_id=run_row.id,
+                        terminal_at=now,
+                    ),
+                    metadata=event_metadata,
+                ),
+            )
 
     async def _require_thread(
         self,

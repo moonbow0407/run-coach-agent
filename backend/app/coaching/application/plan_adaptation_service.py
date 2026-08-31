@@ -16,6 +16,7 @@ from app.coaching.ports.plan_change_repository import PlanChangeRepository
 from app.coaching.ports.plan_repository import PlanRepository
 from app.common.clock import Clock
 from app.common.errors import ConflictError, DomainError, NotFoundError
+from app.common.events import EventMetadata
 from app.common.ids import new_id
 
 
@@ -137,6 +138,7 @@ class PlanAdaptationService:
         *,
         user_id: UUID,
         plan_change_id: UUID,
+        event_metadata: EventMetadata | None = None,
     ) -> PlanActivationResult:
         change = await self._changes.get(user_id=user_id, plan_change_id=plan_change_id)
         if change is None:
@@ -146,6 +148,7 @@ class PlanAdaptationService:
                 user_id=user_id,
                 plan_change_id=plan_change_id,
                 now=self._clock.now(),
+                event_metadata=event_metadata or EventMetadata(correlation_id=new_id()),
             )
         except ConflictError as exc:
             if exc.code == "stale":

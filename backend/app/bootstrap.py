@@ -45,10 +45,17 @@ from app.coaching.application.goal_service import GoalQueryService
 from app.coaching.application.plan_adaptation_service import PlanAdaptationService
 from app.coaching.application.plan_service import PlanQueryService
 from app.coaching.application.training_analysis_service import TrainingAnalysisService
+from app.coaching.application.workout_command_service import (
+    WorkoutCommandService,
+    WorkoutFeedbackCommandService,
+)
 from app.coaching.application.workout_service import WorkoutQueryService
 from app.common.clock import Clock, SystemClock
 from app.common.errors import InfrastructureError, ReasonerError
 from app.infrastructure.config import Settings
+from app.infrastructure.database.repositories.athlete_recompute import (
+    SqlAlchemyAthleteStateRecomputeUnitOfWork,
+)
 from app.infrastructure.database.repositories.coaching import (
     SqlAlchemyAthleteStateRepository,
     SqlAlchemyGoalRepository,
@@ -68,6 +75,9 @@ from app.infrastructure.database.repositories.plan_activation import (
     SqlAlchemyPlanActivationStore,
 )
 from app.infrastructure.database.repositories.trace import SqlAlchemyAgentTraceRecorder
+from app.infrastructure.database.repositories.workout_mutation import (
+    SqlAlchemyWorkoutMutationStore,
+)
 from app.infrastructure.database.session import create_engine, create_session_factory
 from app.infrastructure.lifecycle.memory_projection_listener import (
     MemoryProjectionLifecycleListener,
@@ -84,6 +94,7 @@ from app.infrastructure.memory.extraction import (
     OpenAISemanticMemoryExtractor,
     UnavailableSemanticMemoryExtractor,
 )
+from app.infrastructure.outbox.writer import OutboxWriter
 from app.memory.application.episode_projection_service import EpisodeProjectionService
 from app.memory.application.lifecycle_service import MemoryLifecycleService
 from app.memory.application.retrieval_service import MemoryRetrievalService
@@ -118,6 +129,8 @@ class AppContainer:
     plan_service: PlanQueryService
     athlete_service: AthleteStateQueryService
     workout_service: WorkoutQueryService
+    workout_command_service: WorkoutCommandService
+    workout_feedback_command_service: WorkoutFeedbackCommandService
     athlete_recompute_service: AthleteStateRecomputeService
     plan_adaptation_service: PlanAdaptationService
     training_analysis_service: TrainingAnalysisService
@@ -141,21 +154,25 @@ def build_container(
     engine = create_engine(settings.database_url, poolclass=poolclass)
     sessions = create_session_factory(engine)
     lifecycle = LifecycleDispatcher()
+    outbox = OutboxWriter()
 
     workout_repo = SqlAlchemyWorkoutRepository(sessions)
+    workout_mutation_store = SqlAlchemyWorkoutMutationStore(sessions, outbox)
     plan_repo = SqlAlchemyPlanRepository(sessions)
     athlete_repo = SqlAlchemyAthleteStateRepository(sessions)
     plan_change_repo = SqlAlchemyPlanChangeRepository(sessions)
-    activation_store = SqlAlchemyPlanActivationStore(sessions)
+    activation_store = SqlAlchemyPlanActivationStore(sessions, outbox)
     workout_service = WorkoutQueryService(workout_repo, clock)
+    workout_command_service = WorkoutCommandService(workout_mutation_store, clock)
+    workout_feedback_command_service = WorkoutFeedbackCommandService(
+        workout_mutation_store, clock
+    )
     goal_service = GoalQueryService(SqlAlchemyGoalRepository(sessions))
     plan_service = PlanQueryService(plan_repo)
     athlete_service = AthleteStateQueryService(athlete_repo)
     analysis_service = TrainingAnalysisService(workout_repo, plan_repo)
     athlete_recompute_service = AthleteStateRecomputeService(
-        analysis=analysis_service,
-        workouts=workout_repo,
-        snapshots=athlete_repo,
+        unit_of_work=SqlAlchemyAthleteStateRecomputeUnitOfWork(sessions, outbox),
         clock=clock,
     )
     plan_adaptation_service = PlanAdaptationService(
@@ -167,7 +184,7 @@ def build_container(
     )
     lifecycle.subscribe(PlanChangeLifecycleListener(plan_adaptation_service))
 
-    conversation_store = SqlAlchemyConversationStore(sessions, clock)
+    conversation_store = SqlAlchemyConversationStore(sessions, clock, outbox)
     conversation_reader = SqlAlchemyConversationReader(sessions)
     trace_recorder = SqlAlchemyAgentTraceRecorder(sessions, clock)
 
@@ -301,6 +318,8 @@ def build_container(
         plan_service=plan_service,
         athlete_service=athlete_service,
         workout_service=workout_service,
+        workout_command_service=workout_command_service,
+        workout_feedback_command_service=workout_feedback_command_service,
         athlete_recompute_service=athlete_recompute_service,
         plan_adaptation_service=plan_adaptation_service,
         training_analysis_service=analysis_service,
@@ -359,6 +378,8 @@ def create_app(
     app.state.plan_service = container.plan_service
     app.state.athlete_service = container.athlete_service
     app.state.workout_service = container.workout_service
+    app.state.workout_command_service = container.workout_command_service
+    app.state.workout_feedback_command_service = container.workout_feedback_command_service
     app.state.athlete_recompute_service = container.athlete_recompute_service
     app.state.plan_adaptation_service = container.plan_adaptation_service
     app.state.training_analysis_service = container.training_analysis_service

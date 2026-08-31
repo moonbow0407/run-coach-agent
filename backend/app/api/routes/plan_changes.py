@@ -20,6 +20,7 @@ from app.api.schemas.plan_changes import (
 from app.coaching.application.errors import StalePlanChangeError
 from app.coaching.application.plan_adaptation_service import PlanAdaptationService
 from app.common.errors import RunCoachError
+from app.common.events import EventMetadata
 from app.identity.application.request_context import RequestContext
 
 router = APIRouter()
@@ -72,7 +73,12 @@ async def confirm_plan_change(
 ) -> ConfirmPlanChangeResponse:
     try:
         result = await _adaptation(request).confirm(
-            user_id=request_context.user_id, plan_change_id=plan_change_id
+            user_id=request_context.user_id,
+            plan_change_id=plan_change_id,
+            event_metadata=EventMetadata(
+                correlation_id=request_context.request_id,
+                trace_id=request_context.trace_id,
+            ),
         )
     except StalePlanChangeError as exc:
         raise HTTPException(

@@ -14,7 +14,7 @@ from app.coaching.domain.analysis.training_load import (
     is_quality_workout,
     session_rpe_load,
 )
-from app.coaching.domain.workout.models import WorkoutFeedback
+from app.coaching.domain.workout.models import Workout, WorkoutFeedback
 from app.coaching.ports.plan_repository import PlanRepository
 from app.coaching.ports.workout_repository import WorkoutRepository
 from app.common.errors import NotFoundError
@@ -37,6 +37,20 @@ def _latest_feedback_by_workout(
         if current is None or item.created_at > current.created_at:
             by_workout[item.workout_id] = item
     return by_workout
+
+
+def analyze_training_load_evidence(
+    *,
+    as_of: datetime,
+    workouts: tuple[Workout, ...],
+    feedback: tuple[WorkoutFeedback, ...],
+) -> TrainingLoadAnalysis:
+    """对已在同一事务中读取的 canonical evidence 执行确定性分析。"""
+    return analyze_training_load(
+        as_of=as_of,
+        workouts=workouts,
+        feedback_by_workout_id=_latest_feedback_by_workout(list(feedback)),
+    )
 
 
 class TrainingAnalysisService:
@@ -62,11 +76,10 @@ class TrainingAnalysisService:
             workout_ids=[workout.id for workout in workouts],
             end=as_of,
         )
-        by_workout = _latest_feedback_by_workout(feedback)
-        return analyze_training_load(
+        return analyze_training_load_evidence(
             as_of=as_of,
-            workouts=workouts,
-            feedback_by_workout_id=by_workout,
+            workouts=tuple(workouts),
+            feedback=tuple(feedback),
         )
 
     async def analyze_workout(

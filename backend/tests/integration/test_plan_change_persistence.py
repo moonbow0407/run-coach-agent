@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.coaching.application.athlete_recompute_service import AthleteStateRecomputeService
 from app.coaching.application.errors import StalePlanChangeError
 from app.coaching.application.plan_adaptation_service import PlanAdaptationService
-from app.coaching.application.training_analysis_service import TrainingAnalysisService
+from app.coaching.contracts.durable_events import PLAN_CHANGE_CONFIRMED_V1
 from app.coaching.domain.plan.models import PlanChange, PlanChangeStatus, PlanStatus
 from app.common.clock import FrozenClock
 from app.common.errors import ConflictError, DomainError
@@ -21,34 +21,37 @@ from app.infrastructure.database.models.coaching import (
     PlannedSessionRow,
     TrainingPlanRow,
 )
+from app.infrastructure.database.models.outbox import OutboxEventRow
+from app.infrastructure.database.repositories.athlete_recompute import (
+    SqlAlchemyAthleteStateRecomputeUnitOfWork,
+)
 from app.infrastructure.database.repositories.coaching import (
     SqlAlchemyAthleteStateRepository,
     SqlAlchemyPlanChangeRepository,
     SqlAlchemyPlanRepository,
-    SqlAlchemyWorkoutRepository,
 )
 from app.infrastructure.database.repositories.plan_activation import (
     SqlAlchemyPlanActivationStore,
 )
 from app.infrastructure.database.session import short_session
+from app.infrastructure.outbox.writer import OutboxWriter
 from app.infrastructure.seed.vertical_slice import seed_vertical_slice
 
 
 def _services(sessions: async_sessionmaker[AsyncSession], clock: FrozenClock):
-    workouts = SqlAlchemyWorkoutRepository(sessions)
     plans = SqlAlchemyPlanRepository(sessions)
     snapshots = SqlAlchemyAthleteStateRepository(sessions)
     recompute = AthleteStateRecomputeService(
-        analysis=TrainingAnalysisService(workouts, plans),
-        workouts=workouts,
-        snapshots=snapshots,
+        unit_of_work=SqlAlchemyAthleteStateRecomputeUnitOfWork(
+            sessions, OutboxWriter()
+        ),
         clock=clock,
     )
     adaptation = PlanAdaptationService(
         plans=plans,
         snapshots=snapshots,
         changes=SqlAlchemyPlanChangeRepository(sessions),
-        activation=SqlAlchemyPlanActivationStore(sessions),
+        activation=SqlAlchemyPlanActivationStore(sessions, OutboxWriter()),
         clock=clock,
     )
     return recompute, adaptation, plans
@@ -153,7 +156,17 @@ async def test_confirm_activates_new_plan_and_is_idempotent(
                 select(TrainingPlanRow.version).where(TrainingPlanRow.user_id == seed.user_id)
             )
         ).all()
+        events = (
+            await db.scalars(
+                select(OutboxEventRow).where(
+                    OutboxEventRow.event_type == PLAN_CHANGE_CONFIRMED_V1,
+                    OutboxEventRow.aggregate_id == change.id,
+                )
+            )
+        ).all()
     assert sorted(versions) == [1, 2]
+    assert len(events) == 1
+    assert events[0].payload["resulting_plan_id"] == str(result.resulting_plan.id)
 
 
 @pytest.mark.asyncio

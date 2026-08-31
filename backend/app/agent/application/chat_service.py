@@ -31,6 +31,7 @@ from app.agent.runtime.agent_runtime import AgentRuntime
 from app.agent.runtime.run_context import AgentTurnCommand
 from app.common.errors import RunCoachError
 from app.common.errors import TurnCancelled as TurnCancelledError
+from app.common.events import EventMetadata
 from app.identity.application.request_context import RequestContext
 
 
@@ -117,6 +118,7 @@ class ChatService:
             await self._store.cancel_turn(
                 user_id=request_context.user_id,
                 turn_id=started.turn.id,
+                event_metadata=_event_metadata(request_context),
             )
             await self._lifecycle.publish_after_commit(
                 TurnCancelled(
@@ -134,6 +136,7 @@ class ChatService:
             await self._store.fail_turn(
                 user_id=request_context.user_id,
                 turn_id=started.turn.id,
+                event_metadata=_event_metadata(request_context),
             )
             await self._lifecycle.publish_after_commit(
                 TurnFailed(
@@ -195,5 +198,14 @@ class ChatService:
             user_id=request_context.user_id,
             turn_id=started.turn.id,
             assistant_content=final.content,
+            event_metadata=_event_metadata(request_context),
         )
         return committed
+
+
+def _event_metadata(context: RequestContext) -> EventMetadata:
+    """只从可信请求上下文构造 durable event 追踪元数据。"""
+    return EventMetadata(
+        correlation_id=context.request_id,
+        trace_id=context.trace_id,
+    )

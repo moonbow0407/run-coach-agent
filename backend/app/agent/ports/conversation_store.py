@@ -12,6 +12,7 @@ from app.agent.models.message import Message
 from app.agent.models.run import AgentRun
 from app.agent.models.thread import Thread
 from app.agent.models.turn import Turn
+from app.common.events import EventMetadata
 
 
 @dataclass(frozen=True)
@@ -52,11 +53,16 @@ class ConversationStore(Protocol):
         user_id: UUID,
         turn_id: UUID,
         assistant_content: str,
+        event_metadata: EventMetadata,
     ) -> CommittedTurn:
         ...
 
-    async def fail_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
+    async def fail_turn(
+        self, *, user_id: UUID, turn_id: UUID, event_metadata: EventMetadata
+    ) -> None:
         ...
 
-    async def cancel_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
+    async def cancel_turn(
+        self, *, user_id: UUID, turn_id: UUID, event_metadata: EventMetadata
+    ) -> None:
         ...

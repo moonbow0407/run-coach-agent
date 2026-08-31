@@ -4,6 +4,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.coaching.domain.plan.models import PlanChange, PlannedSession, TrainingPlan
+from app.common.events import EventMetadata
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class PlanActivationStore(Protocol):
         user_id: UUID,
         plan_change_id: UUID,
         now: datetime,
+        event_metadata: EventMetadata,
     ) -> PlanActivationResult:
         """在用户行锁下完成新鲜度检查、领域校验与版本激活。"""
         ...

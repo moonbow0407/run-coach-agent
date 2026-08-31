@@ -6,10 +6,15 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.coaching.contracts.durable_events import (
+    PlanChangeConfirmedV1,
+    new_plan_change_confirmed_event,
+)
 from app.coaching.domain.plan.models import PlanChangeStatus, PlanStatus, SessionType
 from app.coaching.domain.plan.validator import validate_reduce_upcoming_load_activation
 from app.coaching.ports.plan_activation_store import PlanActivationResult
 from app.common.errors import ConflictError, DomainError, NotFoundError
+from app.common.events import EventMetadata
 from app.common.ids import new_id
 from app.infrastructure.database.locking import lock_user_row
 from app.infrastructure.database.mappers import (
@@ -24,11 +29,17 @@ from app.infrastructure.database.models.coaching import (
     PlannedSessionRow,
     TrainingPlanRow,
 )
+from app.infrastructure.outbox.writer import OutboxWriter
 
 
 class SqlAlchemyPlanActivationStore:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        outbox: OutboxWriter,
+    ) -> None:
         self._sessions = sessions
+        self._outbox = outbox
 
     async def confirm(
         self,
@@ -36,6 +47,7 @@ class SqlAlchemyPlanActivationStore:
         user_id: UUID,
         plan_change_id: UUID,
         now: datetime,
+        event_metadata: EventMetadata,
     ) -> PlanActivationResult:
         # 不能用 short_session(commit=True)：标 STALE 后仍要抛 ConflictError，
         # 必须先 COMMIT 再抛，否则 rollback 会丢掉 STALE。
@@ -163,6 +175,20 @@ class SqlAlchemyPlanActivationStore:
                 change_row.status = PlanChangeStatus.CONFIRMED.value
                 change_row.resolved_at = now
                 change_row.resulting_plan_id = new_plan_id
+                self._outbox.add(
+                    session,
+                    new_plan_change_confirmed_event(
+                        user_id=user_id,
+                        payload=PlanChangeConfirmedV1(
+                            plan_change_id=change_row.id,
+                            from_plan_id=change_row.from_plan_id,
+                            resulting_plan_id=new_plan_id,
+                            based_on_state_id=change_row.based_on_state_id,
+                            confirmed_at=now,
+                        ),
+                        metadata=event_metadata,
+                    ),
+                )
                 await session.commit()
                 confirmed = plan_change_from_row(change_row)
                 return PlanActivationResult(
