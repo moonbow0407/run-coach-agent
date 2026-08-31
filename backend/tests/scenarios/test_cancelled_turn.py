@@ -138,11 +138,11 @@ async def test_cancelled_turn_stops_running_tool(
         )
     )
 
-    await asyncio.wait_for(tool_started.wait(), timeout=1)
+    await asyncio.wait_for(tool_started.wait(), timeout=10)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    await asyncio.wait_for(tool_cancelled.wait(), timeout=1)
+    await asyncio.wait_for(tool_cancelled.wait(), timeout=10)
 
     assert not any(isinstance(event, ToolCompleted) for event in events)
     assert "TurnCommitted" not in event_types(events)

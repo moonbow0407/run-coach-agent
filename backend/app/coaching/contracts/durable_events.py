@@ -133,6 +133,63 @@ def new_plan_change_confirmed_event(
     )
 
 
+def decode_workout_changed(event: DurableEventEnvelope) -> WorkoutChangedV1:
+    validate_coaching_event(event)
+    if event.event_type != WORKOUT_CHANGED_V1:
+        raise DomainError("unsupported_workout_changed_event")
+    return WorkoutChangedV1(
+        workout_id=_uuid(event.payload, "workout_id"),
+        change_kind=_change_kind(event.payload),
+        source_fact_at=_datetime(event.payload, "source_fact_at"),
+        available_at=_datetime(event.payload, "available_at"),
+    )
+
+
+def decode_workout_feedback_changed(
+    event: DurableEventEnvelope,
+) -> WorkoutFeedbackChangedV1:
+    validate_coaching_event(event)
+    if event.event_type != WORKOUT_FEEDBACK_CHANGED_V1:
+        raise DomainError("unsupported_workout_feedback_changed_event")
+    return WorkoutFeedbackChangedV1(
+        feedback_id=_uuid(event.payload, "feedback_id"),
+        workout_id=_uuid(event.payload, "workout_id"),
+        change_kind=_change_kind(event.payload),
+        source_fact_at=_datetime(event.payload, "source_fact_at"),
+        available_at=_datetime(event.payload, "available_at"),
+    )
+
+
+def decode_athlete_state_recomputed(
+    event: DurableEventEnvelope,
+) -> AthleteStateRecomputedV1:
+    validate_coaching_event(event)
+    if event.event_type != ATHLETE_STATE_RECOMPUTED_V1:
+        raise DomainError("unsupported_athlete_state_event")
+    version = event.payload.get("snapshot_version")
+    if not isinstance(version, int):
+        raise DomainError("invalid_coaching_event_payload")
+    return AthleteStateRecomputedV1(
+        snapshot_id=_uuid(event.payload, "snapshot_id"),
+        snapshot_version=version,
+        as_of=_datetime(event.payload, "as_of"),
+        algorithm_version=_string(event.payload, "algorithm_version"),
+    )
+
+
+def decode_plan_change_confirmed(event: DurableEventEnvelope) -> PlanChangeConfirmedV1:
+    validate_coaching_event(event)
+    if event.event_type != PLAN_CHANGE_CONFIRMED_V1:
+        raise DomainError("unsupported_plan_change_event")
+    return PlanChangeConfirmedV1(
+        plan_change_id=_uuid(event.payload, "plan_change_id"),
+        from_plan_id=_uuid(event.payload, "from_plan_id"),
+        resulting_plan_id=_uuid(event.payload, "resulting_plan_id"),
+        based_on_state_id=_uuid(event.payload, "based_on_state_id"),
+        confirmed_at=_datetime(event.payload, "confirmed_at"),
+    )
+
+
 def validate_coaching_event(event: DurableEventEnvelope) -> None:
     expected = _SCHEMAS.get(event.event_type)
     if expected is None:
@@ -153,7 +210,7 @@ def validate_coaching_event(event: DurableEventEnvelope) -> None:
     if _uuid(event.payload, identity_key) != event.aggregate_id:
         raise DomainError("durable_event_identity_mismatch")
     if event.event_type in {WORKOUT_CHANGED_V1, WORKOUT_FEEDBACK_CHANGED_V1}:
-        ChangeKind(_string(event.payload, "change_kind"))
+        _change_kind(event.payload)
         available_at = _datetime(event.payload, "available_at")
         _datetime(event.payload, "source_fact_at")
         if available_at != event.occurred_at:
@@ -220,6 +277,13 @@ def _event(
         payload=payload,
         metadata=metadata,
     )
+
+
+def _change_kind(payload: EventPayload) -> ChangeKind:
+    try:
+        return ChangeKind(_string(payload, "change_kind"))
+    except ValueError as exc:
+        raise DomainError("invalid_coaching_event_payload") from exc
 
 
 def _string(payload: EventPayload, key: str) -> str:

@@ -17,7 +17,10 @@ from app.coaching.domain.athlete.models import AthleteStateSnapshot
 from app.coaching.ports.athlete_recompute_uow import (
     AthleteStateEvidenceSet,
     AthleteStateRecomputeTransaction,
+    AthleteStateTrigger,
+    AthleteStateTriggerType,
 )
+from app.common.errors import DomainError, NotFoundError
 from app.common.events import EventMetadata
 from app.common.ids import new_id
 from app.infrastructure.database.locking import lock_user_row
@@ -81,9 +84,12 @@ class _SqlAlchemyAthleteStateRecomputeTransaction:
     async def load_evidence(
         self,
         *,
+        trigger: AthleteStateTrigger | None,
         trigger_available_at: datetime,
         observed_at: datetime,
     ) -> AthleteStateEvidenceSet:
+        if trigger is not None:
+            await self._validate_trigger(trigger)
         latest_row = await self._session.scalar(
             select(AthleteStateSnapshotRow)
             .where(AthleteStateSnapshotRow.user_id == self._user_id)
@@ -147,6 +153,31 @@ class _SqlAlchemyAthleteStateRecomputeTransaction:
             feedback=tuple(feedback_from_row(row) for row in feedback_rows),
             cutoff=cutoff,
         )
+
+    async def _validate_trigger(self, trigger: AthleteStateTrigger) -> None:
+        """在用户锁内重读 source；跨用户、被删除或篡改事件都永久失败。"""
+        if trigger.source_type is AthleteStateTriggerType.WORKOUT:
+            row = await self._session.scalar(
+                select(WorkoutRow).where(
+                    WorkoutRow.id == trigger.source_id,
+                    WorkoutRow.user_id == self._user_id,
+                )
+            )
+            if row is None:
+                raise NotFoundError("canonical_workout_source_not_found")
+        else:
+            row = await self._session.scalar(
+                select(WorkoutFeedbackRow).where(
+                    WorkoutFeedbackRow.id == trigger.source_id,
+                    WorkoutFeedbackRow.user_id == self._user_id,
+                )
+            )
+            if row is None:
+                raise NotFoundError("canonical_feedback_source_not_found")
+            if trigger.workout_id is None or row.workout_id != trigger.workout_id:
+                raise DomainError("canonical_source_identity_mismatch")
+        if row.updated_at < trigger.available_at:
+            raise DomainError("canonical_source_version_mismatch")
 
     async def append_snapshot(
         self,

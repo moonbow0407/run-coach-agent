@@ -12,7 +12,10 @@ from app.coaching.domain.athlete.evaluator import (
     AthleteStateEvidence,
 )
 from app.coaching.domain.athlete.models import AthleteStateSnapshot
-from app.coaching.ports.athlete_recompute_uow import AthleteStateRecomputeUnitOfWork
+from app.coaching.ports.athlete_recompute_uow import (
+    AthleteStateRecomputeUnitOfWork,
+    AthleteStateTrigger,
+)
 from app.common.clock import Clock
 from app.common.errors import DomainError
 from app.common.events import EventMetadata
@@ -47,6 +50,7 @@ class AthleteStateRecomputeService:
         """显式重算入口；内部命令未提供关联 ID 时创建新的可信 correlation。"""
         result = await self.recompute_for_trigger(
             user_id=user_id,
+            trigger=None,
             trigger_available_at=as_of if as_of is not None else self._clock.now(),
             event_metadata=(
                 event_metadata or EventMetadata(correlation_id=new_id())
@@ -58,6 +62,7 @@ class AthleteStateRecomputeService:
         self,
         *,
         user_id: UUID,
+        trigger: AthleteStateTrigger | None,
         trigger_available_at: datetime,
         event_metadata: EventMetadata,
     ) -> AthleteStateRecomputeResult:
@@ -65,8 +70,9 @@ class AthleteStateRecomputeService:
             raise DomainError("athlete_state_trigger_requires_timezone")
         async with self._unit_of_work.transaction(user_id=user_id) as transaction:
             evidence = await transaction.load_evidence(
+                trigger=trigger,
                 trigger_available_at=trigger_available_at,
-                observed_at=self._clock.now(),
+                observed_at=max(self._clock.now(), trigger_available_at),
             )
             latest = evidence.latest_snapshot
             if (

@@ -56,6 +56,16 @@ def route_event(
     )
 
 
+def event_types_for_task(task_name: str) -> tuple[str, ...]:
+    """恢复扫描使用的固定 route 反向索引。"""
+    event_types = tuple(
+        event_type for event_type, task_names in _ROUTES.items() if task_name in task_names
+    )
+    if not event_types:
+        raise DomainError("unknown_worker_task_route")
+    return event_types
+
+
 def validate_task_route(task: WorkerTaskEnvelope) -> None:
     expected = route_event(task.event, enqueued_at=task.enqueued_at)
     if task.task_version != TASK_VERSION or task.task_name not in {

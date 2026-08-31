@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.agent.models.message import Message
 from app.agent.models.thread import Thread
+from app.agent.models.turn import Turn
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,8 @@ class CommittedTurnMessages:
 
 
 class ConversationReader(Protocol):
+    async def get_turn(self, *, user_id: UUID, turn_id: UUID) -> Turn | None: ...
+
     async def get_thread(self, *, user_id: UUID, thread_id: UUID) -> Thread | None: ...
 
     async def list_committed_messages(

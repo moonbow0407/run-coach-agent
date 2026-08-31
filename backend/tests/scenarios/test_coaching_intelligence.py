@@ -20,6 +20,7 @@ from app.infrastructure.database.models.coaching import (
 )
 from app.infrastructure.database.session import short_session
 from tests.conftest import token_for
+from tests.durable import drain_durable_tasks
 from tests.helpers import request_context_for
 
 
@@ -243,6 +244,7 @@ async def test_turn_committed_promotes_draft(
     assert observation.status == "success"
     assert observation.data["plan_change"]["status"] == "draft"
     assert observation.data["active_plan_unchanged"] is True
+    await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     assert row.status == PlanChangeStatus.PENDING_CONFIRMATION.value
 
@@ -256,6 +258,7 @@ async def test_failed_turn_abandons_draft(make_app, slice_seed, clock, sessions)
             thread_id=None,
             content="帮我降负荷",
         )
+    await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     assert row.status == PlanChangeStatus.ABANDONED.value
 
@@ -327,6 +330,7 @@ async def test_cancelled_turn_abandons_draft(make_app, slice_seed, clock, sessio
     task.cancel()
     with pytest.raises((asyncio.CancelledError, TurnCancelledError)):
         await task
+    await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     assert row.status == PlanChangeStatus.ABANDONED.value
 
@@ -420,6 +424,7 @@ async def test_confirm_api_activates_and_is_idempotent(
         thread_id=None,
         content="帮我降负荷",
     )
+    await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     headers = slice_auth_header
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -458,6 +463,7 @@ async def test_confirm_stale_plan_and_state_return_409(
         thread_id=None,
         content="帮我降负荷",
     )
+    await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     await app.state.athlete_recompute_service.recompute(
         user_id=slice_seed.user_id, as_of=clock.now() + timedelta(minutes=1)
@@ -481,6 +487,7 @@ async def test_cross_user_plan_change_http_404(
         thread_id=None,
         content="帮我降负荷",
     )
+    await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     other = token_for(slice_seed.user_id, test_settings)
     # 另一个用户：再 seed 一个账号。
@@ -513,6 +520,7 @@ async def test_reject_pending_and_repeat_reject(
         thread_id=None,
         content="帮我降负荷",
     )
+    await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         first = await client.post(
@@ -541,6 +549,7 @@ async def test_stale_plan_version_http_409(
         thread_id=None,
         content="帮我降负荷",
     )
+    await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     async with short_session(sessions, commit=True) as session:
         old = await session.get(TrainingPlanRow, slice_seed.plan_id)

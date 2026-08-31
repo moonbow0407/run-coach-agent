@@ -1,5 +1,6 @@
 """Approved durable Evidence source 的 user-scoped 读取与状态校验。"""
 
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -43,6 +44,78 @@ class SqlAlchemyEvidenceReader:
                 for source_type, source_id in source_ids
             ]
         return tuple(result)
+
+    async def read_window(
+        self,
+        *,
+        user_id: UUID,
+        started_at: datetime,
+        ended_at: datetime,
+        source_types: tuple[EvidenceSourceType, ...],
+    ) -> tuple[ValidatedEvidence, ...]:
+        if started_at.tzinfo is None or ended_at.tzinfo is None or ended_at < started_at:
+            raise ValueError("invalid_evidence_window")
+        requested = set(source_types)
+        identities: list[tuple[EvidenceSourceType, UUID]] = []
+        async with short_session(self._sessions) as session:
+            if EvidenceSourceType.WORKOUT in requested:
+                ids = await session.scalars(
+                    select(WorkoutRow.id).where(
+                        WorkoutRow.user_id == user_id,
+                        WorkoutRow.started_at >= started_at,
+                        WorkoutRow.started_at <= ended_at,
+                    )
+                )
+                identities.extend((EvidenceSourceType.WORKOUT, item) for item in ids)
+            if EvidenceSourceType.WORKOUT_FEEDBACK in requested:
+                ids = await session.scalars(
+                    select(WorkoutFeedbackRow.id).where(
+                        WorkoutFeedbackRow.user_id == user_id,
+                        WorkoutFeedbackRow.created_at >= started_at,
+                        WorkoutFeedbackRow.created_at <= ended_at,
+                    )
+                )
+                identities.extend((EvidenceSourceType.WORKOUT_FEEDBACK, item) for item in ids)
+            if EvidenceSourceType.ATHLETE_STATE_SNAPSHOT in requested:
+                ids = await session.scalars(
+                    select(AthleteStateSnapshotRow.id).where(
+                        AthleteStateSnapshotRow.user_id == user_id,
+                        AthleteStateSnapshotRow.as_of >= started_at,
+                        AthleteStateSnapshotRow.as_of <= ended_at,
+                    )
+                )
+                identities.extend(
+                    (EvidenceSourceType.ATHLETE_STATE_SNAPSHOT, item) for item in ids
+                )
+            if EvidenceSourceType.PLAN_CHANGE in requested:
+                ids = await session.scalars(
+                    select(PlanChangeRow.id).where(
+                        PlanChangeRow.user_id == user_id,
+                        PlanChangeRow.status == PlanChangeStatus.CONFIRMED.value,
+                        PlanChangeRow.resolved_at >= started_at,
+                        PlanChangeRow.resolved_at <= ended_at,
+                    )
+                )
+                identities.extend((EvidenceSourceType.PLAN_CHANGE, item) for item in ids)
+            evidence = [
+                await self._read_one(
+                    session,
+                    user_id=user_id,
+                    source_type=source_type,
+                    source_id=source_id,
+                )
+                for source_type, source_id in identities
+            ]
+        return tuple(
+            sorted(
+                evidence,
+                key=lambda item: (
+                    item.source_occurred_at,
+                    item.source_type.value,
+                    str(item.source_id),
+                ),
+            )
+        )
 
     async def _read_one(
         self,
@@ -101,7 +174,7 @@ class SqlAlchemyEvidenceReader:
                     source_type,
                     row.id,
                     row.started_at,
-                    row.created_at.isoformat(),
+                    row.updated_at.isoformat(),
                     f"training:workout:{row.id}",
                     EvidenceIndependenceRole.PRIMARY,
                     {
@@ -122,7 +195,7 @@ class SqlAlchemyEvidenceReader:
                     source_type,
                     row.id,
                     row.created_at,
-                    row.created_at.isoformat(),
+                    row.updated_at.isoformat(),
                     f"training:workout:{row.workout_id}",
                     EvidenceIndependenceRole.PRIMARY,
                     {
@@ -147,6 +220,7 @@ class SqlAlchemyEvidenceReader:
                     f"state:snapshot:{row.id}",
                     EvidenceIndependenceRole.DERIVED_CONTEXT,
                     {
+                        "snapshot_version": row.version,
                         "fatigue_level": row.fatigue_level,
                         "recovery_level": row.recovery_level,
                         "confidence": row.confidence,
@@ -168,7 +242,11 @@ class SqlAlchemyEvidenceReader:
                     row.resolved_at.isoformat(),
                     f"plan_change:{row.id}",
                     EvidenceIndependenceRole.PRIMARY,
-                    {"change_type": row.change_type, "reason": row.reason},
+                    {
+                        "change_type": row.change_type,
+                        "reason": row.reason,
+                        "based_on_state_id": str(row.based_on_state_id),
+                    },
                 )
         elif source_type is EvidenceSourceType.EPISODE:
             row = await session.scalar(

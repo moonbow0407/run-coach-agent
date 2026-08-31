@@ -8,7 +8,6 @@ from app.coaching.ports.workout_mutation_store import (
     WorkoutMutation,
     WorkoutMutationStore,
 )
-from app.common.clock import Clock
 from app.common.events import EventMetadata
 from app.common.ids import new_id
 

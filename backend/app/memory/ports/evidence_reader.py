@@ -26,3 +26,14 @@ class EvidenceReader(Protocol):
         user_id: UUID,
         source_ids: tuple[tuple[EvidenceSourceType, UUID], ...],
     ) -> tuple[ValidatedEvidence, ...]: ...
+
+    async def read_window(
+        self,
+        *,
+        user_id: UUID,
+        started_at: datetime,
+        ended_at: datetime,
+        source_types: tuple[EvidenceSourceType, ...],
+    ) -> tuple[ValidatedEvidence, ...]:
+        """读取有界 canonical evidence 候选；具体 Episode 证据由应用服务选择。"""
+        ...

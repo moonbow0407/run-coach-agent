@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.agent.models.action import FinalAction, ToolCallAction
 from app.agent.reasoning.scripted import ScriptedReasoner
+from tests.durable import drain_durable_tasks
 from tests.helpers import request_context_for
 
 READ_ROUTES = (
@@ -151,6 +152,8 @@ async def test_pending_plan_change_discovery_and_resolution(
         thread_id=None,
         content="请降低接下来的负荷",
     )
+    await drain_durable_tasks(app)
+
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pending = await client.get("/api/v1/plan-changes/pending", headers=slice_auth_header)

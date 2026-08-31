@@ -27,6 +27,7 @@ from app.memory.domain.semantic import MemoryOrigin, SemanticMemoryType
 from app.memory.ports.embedding import EmbeddingBatch
 from app.memory.ports.extractor import ExtractedSemanticCandidate
 from tests.conftest import token_for
+from tests.durable import drain_durable_tasks
 
 
 class ExplicitConstraintExtractor:
@@ -115,6 +116,7 @@ async def test_committed_turn_projects_and_new_thread_retrieves_memory(
             json={"message": "以后周三晚上不要给我排训练，我有课。"},
             headers=headers,
         )
+        await drain_durable_tasks(app)
         replay = await app.state.semantic_memory_projection_service.project_committed_turn(
             user_id=user_id,
             turn_id=UUID(first.json()["turn_id"]),
@@ -125,6 +127,7 @@ async def test_committed_turn_projects_and_new_thread_retrieves_memory(
             json={"message": "帮我看看下周怎么安排。"},
             headers=headers,
         )
+        await drain_durable_tasks(app)
 
     assert first.status_code == 200
     assert replay.replayed
@@ -197,9 +200,11 @@ async def test_same_vectors_remain_cross_user_isolated(
         await client.post(
             "/api/v1/chat", json={"message": "我长期更喜欢晚上训练。"}, headers=headers_a
         )
+        await drain_durable_tasks(app)
         await client.post(
             "/api/v1/chat", json={"message": "我长期更喜欢早上训练。"}, headers=headers_b
         )
+        await drain_durable_tasks(app)
         await client.post(
             "/api/v1/chat", json={"message": "下周怎么安排？"}, headers=headers_a
         )
@@ -327,6 +332,7 @@ async def test_explicit_correction_supersedes_but_historical_as_of_keeps_old_kno
                 json={"message": "我长期更喜欢晚上训练。"},
                 headers=headers,
             )
+            await drain_durable_tasks(first_app)
 
         correction_reasoner = ScriptedReasoner([FinalAction(content="已按你的纠正更新。")])
         correction_app = create_app(
@@ -346,6 +352,7 @@ async def test_explicit_correction_supersedes_but_historical_as_of_keeps_old_kno
                 json={"message": "不是，我现在更喜欢早上训练。"},
                 headers=headers,
             )
+            await drain_durable_tasks(correction_app)
         correction_bundle = correction_reasoner.seen_contexts[0].context_bundle
         assert correction_bundle.current_input == "不是，我现在更喜欢早上训练。"
         assert [item.content for item in correction_bundle.semantic_memories] == [

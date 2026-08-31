@@ -9,6 +9,7 @@ from app.common.ids import new_id
 from app.infrastructure.database.models.user import UserRow
 from app.infrastructure.database.session import short_session
 from tests.conftest import token_for
+from tests.durable import drain_durable_tasks
 from tests.helpers import request_context_for
 
 
@@ -50,6 +51,7 @@ async def test_plan_change_http_get_confirm_reject_bodies(
         thread_id=None,
         content="请降低接下来的负荷",
     )
+    await drain_durable_tasks(app)
     from sqlalchemy import select
 
     from app.infrastructure.database.models.coaching import PlanChangeRow

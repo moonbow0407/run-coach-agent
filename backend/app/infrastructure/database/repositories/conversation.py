@@ -292,6 +292,16 @@ class SqlAlchemyConversationReader:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
+    async def get_turn(self, *, user_id: UUID, turn_id: UUID):
+        async with short_session(self._sessions) as session:
+            row = await session.scalar(
+                select(TurnRow).where(
+                    TurnRow.id == turn_id,
+                    TurnRow.user_id == user_id,
+                )
+            )
+            return turn_from_row(row) if row is not None else None
+
     async def get_thread(self, *, user_id: UUID, thread_id: UUID) -> Thread | None:
         async with short_session(self._sessions) as session:
             row = await session.get(ThreadRow, thread_id)

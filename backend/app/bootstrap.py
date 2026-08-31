@@ -44,6 +44,7 @@ from app.coaching.application.athlete_service import AthleteStateQueryService
 from app.coaching.application.goal_service import GoalQueryService
 from app.coaching.application.plan_adaptation_service import PlanAdaptationService
 from app.coaching.application.plan_service import PlanQueryService
+from app.coaching.application.terminal_turn_service import TerminalTurnFinalizationService
 from app.coaching.application.training_analysis_service import TrainingAnalysisService
 from app.coaching.application.workout_command_service import (
     WorkoutCommandService,
@@ -79,10 +80,6 @@ from app.infrastructure.database.repositories.workout_mutation import (
     SqlAlchemyWorkoutMutationStore,
 )
 from app.infrastructure.database.session import create_engine, create_session_factory
-from app.infrastructure.lifecycle.memory_projection_listener import (
-    MemoryProjectionLifecycleListener,
-)
-from app.infrastructure.lifecycle.plan_change_listener import PlanChangeLifecycleListener
 from app.infrastructure.llm.provider import OpenAICompatibleProvider
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.memory.embedding import (
@@ -133,6 +130,7 @@ class AppContainer:
     workout_feedback_command_service: WorkoutFeedbackCommandService
     athlete_recompute_service: AthleteStateRecomputeService
     plan_adaptation_service: PlanAdaptationService
+    terminal_turn_finalization_service: TerminalTurnFinalizationService
     training_analysis_service: TrainingAnalysisService
     semantic_memory_projection_service: SemanticMemoryProjectionService
     episode_projection_service: EpisodeProjectionService
@@ -182,10 +180,13 @@ def build_container(
         activation=activation_store,
         clock=clock,
     )
-    lifecycle.subscribe(PlanChangeLifecycleListener(plan_adaptation_service))
 
     conversation_store = SqlAlchemyConversationStore(sessions, clock, outbox)
     conversation_reader = SqlAlchemyConversationReader(sessions)
+    terminal_turn_finalization_service = TerminalTurnFinalizationService(
+        conversations=conversation_reader,
+        plan_adaptation=plan_adaptation_service,
+    )
     trace_recorder = SqlAlchemyAgentTraceRecorder(sessions, clock)
 
     if settings.memory_embedding_dimensions != 1536:
@@ -238,12 +239,6 @@ def build_container(
         embedding=embedding_provider,
     )
     memory_lifecycle_service = MemoryLifecycleService(memory_repository)
-    lifecycle.subscribe(
-        MemoryProjectionLifecycleListener(
-            semantic_projection_service,
-            settings.memory_projector_version,
-        )
-    )
 
     # Tool Runtime 装配：Search Index 由 Registry 维护生命周期；
     # search_tools 依赖同一份 Resolver，保证过滤口径与每轮可见集合一致。
@@ -322,6 +317,7 @@ def build_container(
         workout_feedback_command_service=workout_feedback_command_service,
         athlete_recompute_service=athlete_recompute_service,
         plan_adaptation_service=plan_adaptation_service,
+        terminal_turn_finalization_service=terminal_turn_finalization_service,
         training_analysis_service=analysis_service,
         semantic_memory_projection_service=semantic_projection_service,
         episode_projection_service=episode_projection_service,

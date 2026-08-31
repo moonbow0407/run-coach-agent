@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.common.errors import ConflictError, NotFoundError
+from app.common.errors import ConflictError, DomainError, NotFoundError
 from app.common.events import DurableEventEnvelope, EventMetadata
 from app.infrastructure.database.models.outbox import EventConsumptionRow, OutboxEventRow
 from app.infrastructure.database.session import short_session
@@ -16,8 +16,12 @@ from app.infrastructure.database.session import short_session
 
 @dataclass(frozen=True)
 class ClaimedOutboxEvent:
-    event: DurableEventEnvelope
+    event: DurableEventEnvelope | None
+    event_id: UUID
+    event_type: str
+    user_id: UUID
     publish_attempt: int
+    decode_error: str | None = None
 
 
 class ConsumptionClaim(StrEnum):
@@ -25,6 +29,12 @@ class ConsumptionClaim(StrEnum):
     COMPLETED = "completed"
     BUSY = "busy"
     DEAD_LETTERED = "dead_lettered"
+
+
+@dataclass(frozen=True)
+class ConsumptionClaimResult:
+    outcome: ConsumptionClaim
+    attempt: int
 
 
 class ConsumptionFailure(StrEnum):
@@ -72,10 +82,20 @@ class SqlAlchemyOutboxRepository:
                 row.claimed_by = worker_id
                 row.claim_until = now + lease
                 row.publish_attempt_count += 1
+                try:
+                    event = _event_from_row(row)
+                    decode_error = None
+                except (DomainError, TypeError, ValueError, AttributeError, KeyError):
+                    event = None
+                    decode_error = "malformed_outbox_event"
                 claimed.append(
                     ClaimedOutboxEvent(
-                        event=_event_from_row(row),
+                        event=event,
+                        event_id=row.event_id,
+                        event_type=row.event_type,
+                        user_id=row.user_id,
                         publish_attempt=row.publish_attempt_count,
+                        decode_error=decode_error,
                     )
                 )
             await session.flush()
@@ -147,6 +167,44 @@ class SqlAlchemyOutboxRepository:
             ).all()
             return tuple(_event_from_row(row) for row in rows)
 
+    async def list_published_without_terminal_receipt(
+        self,
+        *,
+        consumer_name: str,
+        consumer_version: int,
+        event_types: tuple[str, ...],
+        cutoff: datetime,
+        limit: int,
+    ) -> tuple[DurableEventEnvelope, ...]:
+        terminal_receipt = (
+            select(EventConsumptionRow.event_id)
+            .where(
+                EventConsumptionRow.event_id == OutboxEventRow.event_id,
+                EventConsumptionRow.consumer_name == consumer_name,
+                EventConsumptionRow.consumer_version == consumer_version,
+                EventConsumptionRow.status.in_(("completed", "dead_lettered")),
+            )
+            .exists()
+        )
+        async with short_session(self._sessions) as session:
+            rows = (
+                await session.scalars(
+                    select(OutboxEventRow)
+                    .where(
+                        OutboxEventRow.status == "published",
+                        OutboxEventRow.published_at <= cutoff,
+                        OutboxEventRow.event_type.in_(event_types),
+                        ~terminal_receipt,
+                    )
+                    .order_by(
+                        OutboxEventRow.published_at.asc(),
+                        OutboxEventRow.event_id.asc(),
+                    )
+                    .limit(limit)
+                )
+            ).all()
+            return tuple(_event_from_row(row) for row in rows)
+
     async def _require_claim(
         self, session: AsyncSession, *, event_id: UUID, worker_id: str
     ) -> OutboxEventRow:
@@ -174,7 +232,7 @@ class SqlAlchemyConsumptionRepository:
         worker_id: str,
         now: datetime,
         lease: timedelta,
-    ) -> ConsumptionClaim:
+    ) -> ConsumptionClaimResult:
         async with short_session(self._sessions, commit=True) as session:
             row = await session.get(
                 EventConsumptionRow,
@@ -197,20 +255,20 @@ class SqlAlchemyConsumptionRepository:
                         completed_at=None,
                     )
                 )
-                return ConsumptionClaim.ACQUIRED
+                return ConsumptionClaimResult(ConsumptionClaim.ACQUIRED, 1)
             if row.user_id != user_id:
                 raise ConflictError("event_consumption_user_mismatch")
             if row.status == "completed":
-                return ConsumptionClaim.COMPLETED
+                return ConsumptionClaimResult(ConsumptionClaim.COMPLETED, row.attempt_count)
             if row.status == "dead_lettered":
-                return ConsumptionClaim.DEAD_LETTERED
+                return ConsumptionClaimResult(ConsumptionClaim.DEAD_LETTERED, row.attempt_count)
             if row.lease_until is not None and row.lease_until > now:
-                return ConsumptionClaim.BUSY
+                return ConsumptionClaimResult(ConsumptionClaim.BUSY, row.attempt_count)
             row.attempt_count += 1
             row.lease_owner = worker_id
             row.lease_until = now + lease
             row.last_error_code = None
-            return ConsumptionClaim.ACQUIRED
+            return ConsumptionClaimResult(ConsumptionClaim.ACQUIRED, row.attempt_count)
 
     async def complete(
         self,

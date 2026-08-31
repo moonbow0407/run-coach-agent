@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     """运行配置。敏感项（数据库地址、JWT 密钥、LLM Key）全部来自环境。"""
 
     database_url: str = "postgresql+asyncpg://postgres:114514@localhost:5432/run_coach"
+    redis_url: str = "redis://localhost:6379/0"
+    worker_queue_name: str = "arq:queue"
     jwt_secret: str = Field(min_length=32)
     jwt_algorithm: str = "HS256"
     # JWT 有效期：默认 7 天。

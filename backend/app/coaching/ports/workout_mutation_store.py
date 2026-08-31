@@ -59,7 +59,6 @@ class WorkoutMutationStore(Protocol):
         user_id: UUID,
         workout_id: UUID,
         mutation: WorkoutMutation,
-        available_at: datetime,
         event_metadata: EventMetadata,
     ) -> Workout: ...
 
@@ -69,7 +68,6 @@ class WorkoutMutationStore(Protocol):
         user_id: UUID,
         workout_id: UUID,
         mutation: WorkoutMutation,
-        available_at: datetime,
         event_metadata: EventMetadata,
     ) -> Workout: ...
 
@@ -80,7 +78,6 @@ class WorkoutMutationStore(Protocol):
         workout_id: UUID,
         feedback_id: UUID,
         mutation: WorkoutFeedbackMutation,
-        available_at: datetime,
         event_metadata: EventMetadata,
     ) -> WorkoutFeedback: ...
 
@@ -90,6 +87,5 @@ class WorkoutMutationStore(Protocol):
         user_id: UUID,
         feedback_id: UUID,
         mutation: WorkoutFeedbackMutation,
-        available_at: datetime,
         event_metadata: EventMetadata,
     ) -> WorkoutFeedback: ...
