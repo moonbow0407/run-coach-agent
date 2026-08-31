@@ -1,62 +1,63 @@
-# Run Coach Agent — Backend (Phase 2 Completed)
+# Run Coach Agent — Backend
 
-Phase 1–2 已落地：Agent Core 骨架（可信身份、Coaching 领域只读模型、Conversation 双事务、Reason–Act–Observe 循环）与 Dynamic Tool Runtime。下一阶段见 `docs/phases/PHASE_3_COACHING_INTELLIGENCE.md`。
+FastAPI 后端已实现 Phase 1–4：Agent Core、Dynamic Tool Runtime、Coaching Intelligence 与 Long-term Memory。完整项目说明和前端启动方式见仓库根目录 [`README.md`](../README.md)。
 
-Phase 2 用正式 Dynamic Tool Runtime 替换了临时 Capability 路径：
-
-- **tools/**：Tool Registry（存在性唯一事实来源）、进程内关键词搜索、Run-local Discovery / Resolver / ToolSession、统一 ToolExecutor（存在性 / 可见性 / 参数 / 授权 / 超时 / 错误归一化）
-- **初始可见工具**：`search_tools` + `get_recent_workouts`（always-on）；其余五个只读领域工具需经 `search_tools` 发现后才可见与可执行
-- **Native tool calling**：模型通过供应商原生工具协议调用（不再有文本 JSON Action Contract）；供应商协议封装在 `infrastructure/llm/provider.py`，Reasoner 只认识统一的 `ToolCallAction` / `Observation` / `FinalAction`
-
-## 要求
+## 技术栈
 
 - Python 3.12+
-- Docker（PostgreSQL 16）
+- FastAPI、Pydantic、SQLAlchemy Async、Alembic
+- PostgreSQL 16 + pgvector
+- OpenAI-compatible LLM / embedding provider
+- pytest、pytest-asyncio、Ruff
 
 ## 启动
 
-在仓库根目录：
+先在仓库根目录启动数据库：
 
-```bash
+```powershell
 docker compose up -d postgres
-# 容器映射到本机 5433，避免与已有 PostgreSQL 抢 5432
+Copy-Item .env.example backend\.env
 ```
 
-在 `backend/`：
+容器绑定 `127.0.0.2:5433`。复制配置后，应把 `backend/.env` 中的 `DATABASE_URL` 主机改为 `127.0.0.2`，并填写不少于 32 个字符的 `JWT_SECRET`。
 
-```bash
-py -3.12 -m venv .venv
-.\.venv\Scripts\pip install -e ".[dev]"
-copy ..\.env.example .env
-# 编辑 .env，为 JWT_SECRET 填写至少 32 个字符的随机值
-alembic upgrade head
-uvicorn app.main:app --reload
+随后在 `backend/` 执行：
+
+```powershell
+uv sync --extra dev
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
 ```
 
-本地签发测试 token（先 seed 用户）：
+真实对话与 Memory Projection 还需要配置 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`；场景测试使用测试 Reasoner，不调用真实模型。
 
-```bash
-python scripts/seed_vertical_slice.py
-python scripts/issue_token.py <user_id>
+## 演示数据与访问令牌
+
+```powershell
+uv run python scripts/seed_vertical_slice.py
+uv run python scripts/issue_token.py <user_id>
 ```
 
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/chat ^
-  -H "Authorization: Bearer <token>" ^
-  -H "Content-Type: application/json" ^
-  -d "{\"message\":\"我最近训练状态怎么样？\"}"
+健康检查地址为 `http://127.0.0.1:8000/health`，API 使用 `/api/v1` 前缀并要求 Bearer JWT。
+
+## 验证
+
+```powershell
+uv run ruff check app tests
+
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://run_coach:run_coach@127.0.0.2:5433/run_coach_test"
+$env:ADMIN_DATABASE_URL = "postgresql+asyncpg://run_coach:run_coach@127.0.0.2:5433/postgres"
+uv run pytest -q
 ```
 
-场景测试使用 `ScriptedReasoner`，native tool calling 契约测试使用 `FakeProvider`，均不调用真实模型。真实对话需要在 `.env` 中自行配置 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`（需支持 native tool calling）。
+测试 fixture 会创建和清理 `run_coach_test`，数据库必须已安装 pgvector 扩展。
 
-## 测试
+## 模块边界
 
-```bash
-pytest
-```
+- `app/agent`：Agent Runtime、Conversation、Context 与 Reasoner。
+- `app/coaching`：训练事实、状态计算、训练分析和计划调整。
+- `app/memory`：Semantic Memory、Episode、Evidence、Projection、Lifecycle 与 Retrieval。
+- `app/tools`：Registry、Discovery、Resolver 与 Executor。
+- `app/infrastructure`：数据库、pgvector、LLM、认证和 production wiring。
 
-## 架构接缝
-
-- `ToolRuntime`（Registry / Search / Resolver / Executor）→ Phase 3 Coaching Intelligence 以 Domain Service + Tool 接入
-- `NullMemoryContextProvider` 与未来 Memory Tool → Phase 4 Memory
-- `TurnCommitted` → 后续 Projector / Eval
+生产路径使用真实 `RetrievedMemoryContextProvider`。Phase 4 的进程内 Memory listener 仍是 best-effort owner；可靠 Outbox / Worker 投递由 Phase 5 实现。
