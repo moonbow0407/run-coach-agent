@@ -87,6 +87,7 @@ async def test_recompute_ignores_feedback_created_after_as_of(
                 workout_type="interval",
                 source="manual",
                 created_at=clock.now(),
+                updated_at=clock.now(),
             )
         )
         await session.flush()
@@ -100,6 +101,7 @@ async def test_recompute_ignores_feedback_created_after_as_of(
                 soreness=10,
                 note="as_of 之后才补报",
                 created_at=clock.now() + timedelta(days=2),
+                updated_at=clock.now() + timedelta(days=2),
             )
         )
     service = _recompute_service(sessions, clock)

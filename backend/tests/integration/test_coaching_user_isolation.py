@@ -45,6 +45,7 @@ async def test_workouts_are_isolated_by_user(
                 workout_type="easy",
                 source="manual",
                 created_at=now,
+                updated_at=now,
             )
         )
         session.add(
@@ -59,6 +60,7 @@ async def test_workouts_are_isolated_by_user(
                 workout_type="tempo",
                 source="manual",
                 created_at=now,
+                updated_at=now,
             )
         )
 

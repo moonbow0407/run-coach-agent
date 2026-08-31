@@ -89,6 +89,7 @@ async def seed_vertical_slice(
                 workout_type=workout_type,
                 source="seed",
                 created_at=started_at,
+                updated_at=started_at,
             )
         )
     await session.flush()
@@ -104,6 +105,7 @@ async def seed_vertical_slice(
             soreness=6,
             note="最后两组间歇明显掉速",
             created_at=datetime(2026, 8, 27, 8, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 27, 8, 0, tzinfo=UTC),
         )
     )
 

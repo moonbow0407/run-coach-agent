@@ -174,6 +174,7 @@ async def test_cross_user_workout_detail_not_accessible(
                 workout_type="tempo",
                 source="manual",
                 created_at=now,
+                updated_at=now,
             )
         )
     # 用目标用户身份尝试读取其他用户的 workout（这里用 seed 用户读别人的 ID）。

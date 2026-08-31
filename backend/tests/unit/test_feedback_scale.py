@@ -19,4 +19,5 @@ def test_subjective_scale_rejects_out_of_range() -> None:
             soreness=None,
             note=None,
             created_at=now,
+            updated_at=now,
         )

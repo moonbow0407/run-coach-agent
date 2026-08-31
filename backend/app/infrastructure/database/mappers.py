@@ -51,6 +51,7 @@ def workout_from_row(row: WorkoutRow) -> Workout:
         workout_type=WorkoutType(row.workout_type),
         source=WorkoutSource(row.source),
         created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -64,6 +65,7 @@ def feedback_from_row(row: WorkoutFeedbackRow) -> WorkoutFeedback:
         soreness=row.soreness,
         note=row.note,
         created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 

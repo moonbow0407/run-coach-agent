@@ -42,6 +42,7 @@ class Workout:
     workout_type: WorkoutType
     source: WorkoutSource
     created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class WorkoutFeedback:
     soreness: int | None
     note: str | None
     created_at: datetime
+    updated_at: datetime
 
     def __post_init__(self) -> None:
         validate_subjective_scale("perceived_exertion", self.perceived_exertion)

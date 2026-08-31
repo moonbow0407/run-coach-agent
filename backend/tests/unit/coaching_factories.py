@@ -34,6 +34,7 @@ def make_workout(
         workout_type=workout_type,
         source=WorkoutSource.MANUAL,
         created_at=now,
+        updated_at=now,
     )
 
 
@@ -47,6 +48,7 @@ def make_feedback(
     note: str | None = None,
     created_at: datetime | None = None,
 ) -> WorkoutFeedback:
+    moment = created_at or datetime(2026, 8, 27, 8, 0, tzinfo=UTC)
     return WorkoutFeedback(
         id=uuid4(),
         user_id=user_id or uuid4(),
@@ -55,5 +57,6 @@ def make_feedback(
         subjective_fatigue=subjective_fatigue,
         soreness=soreness,
         note=note,
-        created_at=created_at or datetime(2026, 8, 27, 8, 0, tzinfo=UTC),
+        created_at=moment,
+        updated_at=moment,
     )

@@ -21,6 +21,7 @@ from app.infrastructure.database.models.memory import (
     MemoryProjectionRunRow,
     SemanticMemoryRow,
 )
+from app.infrastructure.database.models.outbox import EventConsumptionRow, OutboxEventRow
 from app.infrastructure.database.models.user import UserRow
 
 __all__ = [
@@ -28,9 +29,11 @@ __all__ = [
     "AthleteStateSnapshotRow",
     "EpisodeEvidenceRow",
     "EpisodeRow",
+    "EventConsumptionRow",
     "MemoryEvidenceRow",
     "MemoryProjectionRunRow",
     "MessageRow",
+    "OutboxEventRow",
     "PlanChangeRow",
     "PlannedSessionRow",
     "RunStepRow",

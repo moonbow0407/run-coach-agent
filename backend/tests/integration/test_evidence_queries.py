@@ -45,6 +45,7 @@ async def test_list_between_excludes_future_and_respects_start(
                 workout_type="easy",
                 source="manual",
                 created_at=clock.now(),
+                updated_at=clock.now(),
             )
         )
         session.add(
@@ -59,6 +60,7 @@ async def test_list_between_excludes_future_and_respects_start(
                 workout_type="easy",
                 source="manual",
                 created_at=clock.now(),
+                updated_at=clock.now(),
             )
         )
         session.add(
@@ -73,6 +75,7 @@ async def test_list_between_excludes_future_and_respects_start(
                 workout_type="tempo",
                 source="manual",
                 created_at=clock.now(),
+                updated_at=clock.now(),
             )
         )
     repo = SqlAlchemyWorkoutRepository(sessions)
@@ -111,6 +114,7 @@ async def test_list_feedback_for_workouts_is_batched(
                     workout_type="easy",
                     source="manual",
                     created_at=clock.now(),
+                    updated_at=clock.now(),
                 )
             )
         await session.flush()
@@ -125,6 +129,7 @@ async def test_list_feedback_for_workouts_is_batched(
                     soreness=4,
                     note=None,
                     created_at=clock.now(),
+                    updated_at=clock.now(),
                 )
             )
     repo = SqlAlchemyWorkoutRepository(sessions)
@@ -158,6 +163,7 @@ async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
                 workout_type="easy",
                 source="manual",
                 created_at=clock.now(),
+                updated_at=clock.now(),
             )
         )
         await session.flush()
@@ -171,6 +177,7 @@ async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
                 soreness=3,
                 note=None,
                 created_at=AS_OF - timedelta(hours=30),
+                updated_at=AS_OF - timedelta(hours=30),
             )
         )
         session.add(
@@ -183,6 +190,7 @@ async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
                 soreness=9,
                 note=None,
                 created_at=AS_OF - timedelta(hours=1),
+                updated_at=AS_OF - timedelta(hours=1),
             )
         )
         # as_of 之后才补报的反馈：情况 A 的时间穿越源头。
@@ -196,6 +204,7 @@ async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
                 soreness=10,
                 note=None,
                 created_at=AS_OF + timedelta(hours=1),
+                updated_at=AS_OF + timedelta(hours=1),
             )
         )
     repo = SqlAlchemyWorkoutRepository(sessions)
@@ -226,6 +235,7 @@ async def test_list_between_is_user_isolated(
                 workout_type="easy",
                 source="manual",
                 created_at=clock.now(),
+                updated_at=clock.now(),
             )
         )
         session.add(
@@ -240,6 +250,7 @@ async def test_list_between_is_user_isolated(
                 workout_type="tempo",
                 source="manual",
                 created_at=clock.now(),
+                updated_at=clock.now(),
             )
         )
     repo = SqlAlchemyWorkoutRepository(sessions)
