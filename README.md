@@ -43,17 +43,19 @@ Canonical Fact、Derived State 与 Memory 的边界以 [`docs/ARCHITECTURE.md`](
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)（推荐）
-- Docker / Docker Compose
+- 本地安装的 PostgreSQL（需包含 pgvector 扩展）
 - Node.js 20+ 与 npm（运行前端时需要）
 
-数据库使用 PostgreSQL 16 + pgvector。仓库容器绑定 `127.0.0.2:5433`，避免与本机 PostgreSQL 冲突。
+数据库使用本地 PostgreSQL 实例，连接地址默认 `localhost:5432`。
 
 ## 快速启动
 
-### 1. 启动数据库
+### 1. 准备数据库
+
+使用本地 PostgreSQL（需已安装 pgvector 扩展）。首次使用时创建应用数据库：
 
 ```powershell
-docker compose up -d postgres
+psql "postgresql://postgres:<密码>@localhost:5432/postgres" -c "CREATE DATABASE run_coach"
 ```
 
 ### 2. 配置并启动后端
@@ -68,7 +70,7 @@ uv run uvicorn app.main:app --reload
 
 编辑 `backend/.env` 时至少需要：
 
-- 将 Docker 数据库地址设为 `postgresql+asyncpg://run_coach:run_coach@127.0.0.2:5433/run_coach`；
+- 如本地 PostgreSQL 的账号、密码或端口与模板默认值（`postgres` / `localhost:5432`）不同，修改 `DATABASE_URL`；
 - 为 `JWT_SECRET` 设置不少于 32 个字符的随机值；
 - 真实对话与 Memory 投影需配置 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。兼容端点需要支持原生 tool calling 和配置的 embedding 模型。
 
@@ -100,11 +102,11 @@ cd backend
 uv run ruff check app tests
 ```
 
-完整测试需要支持 pgvector 的独立测试数据库：
+完整测试需要支持 pgvector 的本地测试数据库。fixture 会自动创建并清理 `run_coach_test`，默认连接 `localhost:5432`；本机实例连接信息不同时可覆盖：
 
 ```powershell
-$env:TEST_DATABASE_URL = "postgresql+asyncpg://run_coach:run_coach@127.0.0.2:5433/run_coach_test"
-$env:ADMIN_DATABASE_URL = "postgresql+asyncpg://run_coach:run_coach@127.0.0.2:5433/postgres"
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://postgres:<密码>@localhost:5432/run_coach_test"
+$env:ADMIN_DATABASE_URL = "postgresql+asyncpg://postgres:<密码>@localhost:5432/postgres"
 uv run pytest -q
 ```
 

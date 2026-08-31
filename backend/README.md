@@ -6,20 +6,19 @@ FastAPI 后端已实现 Phase 1–4：Agent Core、Dynamic Tool Runtime、Coachi
 
 - Python 3.12+
 - FastAPI、Pydantic、SQLAlchemy Async、Alembic
-- PostgreSQL 16 + pgvector
+- PostgreSQL（含 pgvector 扩展）
 - OpenAI-compatible LLM / embedding provider
 - pytest、pytest-asyncio、Ruff
 
 ## 启动
 
-先在仓库根目录启动数据库：
+使用本地 PostgreSQL（需已安装 pgvector 扩展），复制配置：
 
 ```powershell
-docker compose up -d postgres
 Copy-Item .env.example backend\.env
 ```
 
-容器绑定 `127.0.0.2:5433`。复制配置后，应把 `backend/.env` 中的 `DATABASE_URL` 主机改为 `127.0.0.2`，并填写不少于 32 个字符的 `JWT_SECRET`。
+复制配置后，按需修改 `backend/.env` 中的 `DATABASE_URL`（默认连接 `localhost:5432` 的本地实例），并填写不少于 32 个字符的 `JWT_SECRET`。应用数据库 `run_coach` 需提前创建。
 
 随后在 `backend/` 执行：
 
@@ -45,12 +44,12 @@ uv run python scripts/issue_token.py <user_id>
 ```powershell
 uv run ruff check app tests
 
-$env:TEST_DATABASE_URL = "postgresql+asyncpg://run_coach:run_coach@127.0.0.2:5433/run_coach_test"
-$env:ADMIN_DATABASE_URL = "postgresql+asyncpg://run_coach:run_coach@127.0.0.2:5433/postgres"
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://postgres:<密码>@localhost:5432/run_coach_test"
+$env:ADMIN_DATABASE_URL = "postgresql+asyncpg://postgres:<密码>@localhost:5432/postgres"
 uv run pytest -q
 ```
 
-测试 fixture 会创建和清理 `run_coach_test`，数据库必须已安装 pgvector 扩展。
+测试默认使用同一本地实例上的 `run_coach_test` 数据库，fixture 会自动创建和清理，本机实例连接信息不同时才需要上面的环境变量覆盖。本地 PostgreSQL 必须已安装 pgvector 扩展。
 
 ## 模块边界
 

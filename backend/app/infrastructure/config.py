@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """运行配置。敏感项（数据库地址、JWT 密钥、LLM Key）全部来自环境。"""
 
-    database_url: str = "postgresql+asyncpg://run_coach:run_coach@localhost:5433/run_coach"
+    database_url: str = "postgresql+asyncpg://postgres:114514@localhost:5432/run_coach"
     jwt_secret: str = Field(min_length=32)
     jwt_algorithm: str = "HS256"
     # JWT 有效期：默认 7 天。

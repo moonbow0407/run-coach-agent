@@ -13,8 +13,7 @@ Next.js 15（App Router）+ React 19 + TypeScript + Tailwind CSS v4。字体：A
 前端通过 Next.js rewrites 把 `/api/v1` 与 `/health` 代理到 FastAPI，**后端无需配置 CORS**。后端地址默认 `http://localhost:8000`，可用环境变量 `BACKEND_ORIGIN` 覆盖。
 
 ```bash
-# 1. 后端（仓库根目录）
-docker compose up -d                     # PostgreSQL（5433）
+# 1. 后端（本地 PostgreSQL 需已启动并安装 pgvector）
 cd backend
 cp ../.env.example .env                  # 填写 JWT_SECRET（≥32 字符）与 LLM_* 配置
 alembic upgrade head                     # 建表

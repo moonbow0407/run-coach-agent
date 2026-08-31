@@ -16,8 +16,8 @@
 - embedding dimensions：`1536`
 - embedding model / version：由 `MEMORY_EMBEDDING_MODEL` 与
   `MEMORY_EMBEDDING_VERSION` 配置，并保存在每条 Memory / Episode 上。
-- PostgreSQL + pgvector 是唯一长期 Memory store；Docker 使用
-  `pgvector/pgvector:pg16`。
+- PostgreSQL + pgvector 是唯一长期 Memory store；数据库为本地安装的
+  PostgreSQL 实例（需包含 pgvector 扩展）。
 
 ## Idempotency and replay
 
@@ -38,11 +38,9 @@
 
 ## Verification
 
-测试数据库必须支持 pgvector。仓库容器绑定 `127.0.0.2:5433`，避免与本机已有
-PostgreSQL 冲突。验证命令：
+测试数据库必须支持 pgvector，使用本地 PostgreSQL 实例。验证命令：
 
 ```powershell
-docker compose up -d postgres
 cd backend
 uv sync --extra dev
 uv run ruff check app tests

@@ -28,15 +28,15 @@ from app.infrastructure.database.base import Base
 from app.infrastructure.database.models.user import UserRow
 from app.infrastructure.database.session import create_session_factory, short_session
 
-# 测试数据库地址允许用环境变量覆盖：默认端口 5433 可能被本机其他
-# PostgreSQL 实例（如 WSL 转发）占用，此时把容器映射到其他回环地址。
+# 测试数据库地址允许用环境变量覆盖：默认连接本机 PostgreSQL（localhost:5432），
+# 当本机实例的地址、账号或密码不同时，通过环境变量指定。
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://run_coach:run_coach@localhost:5433/run_coach_test",
+    "postgresql+asyncpg://postgres:114514@localhost:5432/run_coach_test",
 )
 ADMIN_DATABASE_URL = os.environ.get(
     "ADMIN_DATABASE_URL",
-    "postgresql+asyncpg://run_coach:run_coach@localhost:5433/postgres",
+    "postgresql+asyncpg://postgres:114514@localhost:5432/postgres",
 )
 TEST_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 BACKEND_ROOT = Path(__file__).resolve().parents[1]

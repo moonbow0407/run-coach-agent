@@ -38,7 +38,7 @@ Phase 5 将 Phase 3 的 `AthleteStateRecomputeService` 与 Phase 4 的 Memory Pr
 
 当前代码：
 
-- FastAPI 与 PostgreSQL 已存在；`docker-compose.yml` 尚无 Redis，Python 依赖中没有 task queue。
+- FastAPI 与 PostgreSQL 已存在（PostgreSQL 为本地安装实例，仓库不提供数据库容器）；尚无 Redis，Python 依赖中没有 task queue。
 - `LifecycleDispatcher` 是进程内事件总线。`publish_after_commit()` 发生在数据库提交后，listener 失败只记录日志。
 - `TurnCommitted`、`TurnFailed`、`TurnCancelled` 是 Conversation lifecycle events；`ReasoningStarted`、`ToolStarted` 等是 runtime events。
 - `PlanChangeLifecycleListener` 依赖 post-commit listener 把 DRAFT 提升为 PENDING 或在失败 / 取消后 ABANDONED，因此仍存在 commit 后进程崩溃导致状态未收尾的窗口。
