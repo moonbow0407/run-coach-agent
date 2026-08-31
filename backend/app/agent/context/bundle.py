@@ -91,29 +91,34 @@ class MessageView:
 
 @dataclass(frozen=True)
 class MemoryView:
-    """语义记忆在上下文中的视图（Phase 4 接缝，当前为空）。"""
+    """语义记忆的精简视图，不携带 embedding 或 Evidence graph。"""
 
+    id: UUID
     type: str
     content: str
-    confidence: float | None
+    origin: str
+    confidence: float
+    valid_from: datetime
+    valid_until: datetime | None
 
 
 @dataclass(frozen=True)
 class EpisodeView:
-    """情节记忆在上下文中的视图（Phase 4 接缝，当前为空）。"""
+    """已完成情节记忆的精简视图。"""
 
+    id: UUID
     type: str
     summary: str
-    started_at: datetime | None
-    ended_at: datetime | None
+    started_at: datetime
+    ended_at: datetime
+    importance: float
 
 
 @dataclass(frozen=True)
 class ContextBundle:
     """发给 Reasoner 的完整上下文合同。
 
-    semantic/episodic memories 为空但字段保留，以便 Phase 4 替换
-    MemoryContextProvider 时不改 Reasoner API。
+    semantic/episodic memories 由受预算约束的真实检索 Provider 提供。
     """
 
     system: str

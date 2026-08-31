@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_model: str | None = None
 
+    # Memory projector 与 embedding 分开版本化；维度是 Phase 4 持久化合同。
+    memory_projector_version: str = "phase4.v1"
+    memory_embedding_model: str = "text-embedding-3-small"
+    memory_embedding_version: str = "1"
+    memory_embedding_dimensions: int = 1536
+
     # 仅作为 Runtime 护栏，防止无限循环；不是“最多思考几轮”的产品契约。
     agent_max_steps: int = 16
     conversation_history_limit: int = 20

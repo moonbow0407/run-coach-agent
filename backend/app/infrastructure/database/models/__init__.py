@@ -14,15 +14,27 @@ from app.infrastructure.database.models.coaching import (
     WorkoutFeedbackRow,
     WorkoutRow,
 )
+from app.infrastructure.database.models.memory import (
+    EpisodeEvidenceRow,
+    EpisodeRow,
+    MemoryEvidenceRow,
+    MemoryProjectionRunRow,
+    SemanticMemoryRow,
+)
 from app.infrastructure.database.models.user import UserRow
 
 __all__ = [
     "AgentRunRow",
     "AthleteStateSnapshotRow",
+    "EpisodeEvidenceRow",
+    "EpisodeRow",
+    "MemoryEvidenceRow",
+    "MemoryProjectionRunRow",
     "MessageRow",
     "PlanChangeRow",
     "PlannedSessionRow",
     "RunStepRow",
+    "SemanticMemoryRow",
     "ThreadRow",
     "TrainingGoalRow",
     "TrainingPlanRow",

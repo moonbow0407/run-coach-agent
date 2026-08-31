@@ -98,6 +98,18 @@ class PlanAdaptationService:
             raise NotFoundError("计划调整不存在")
         return change
 
+    async def get_pending(self, *, user_id: UUID) -> PlanChange:
+        """读取该用户唯一未解决的提案（draft / pending_confirmation）。
+
+        每用户至多一条未解决提案是领域不变量（部分唯一索引），
+        因此这里不需要列表语义；没有未解决提案时按 NotFound 报告，
+        由前端渲染为“没有待确认调整”的空状态。
+        """
+        change = await self._changes.get_unresolved(user_id=user_id)
+        if change is None:
+            raise NotFoundError("没有待确认的计划调整")
+        return change
+
     async def promote_draft_for_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
         for change in await self._changes.list_by_turn(user_id=user_id, turn_id=turn_id):
             if change.status is PlanChangeStatus.DRAFT:
@@ -160,9 +172,7 @@ class PlanAdaptationService:
         except ConflictError:
             # CAS 失败：读取到的 PENDING 已被并发 confirm / reject 等改写。
             # 重新读取给出准确结果，绝不覆盖已生效的终态。
-            current = await self._changes.get(
-                user_id=user_id, plan_change_id=plan_change_id
-            )
+            current = await self._changes.get(user_id=user_id, plan_change_id=plan_change_id)
             if current is not None and current.status is PlanChangeStatus.REJECTED:
                 return current
             raise ConflictError("plan_change_not_rejectable") from None

@@ -31,8 +31,7 @@ from app.coaching.domain.goal.models import TrainingGoal
 
 
 class WorkingContextProvider(Protocol):
-    async def load(self, *, user_id: UUID, as_of: datetime) -> WorkingContext:
-        ...
+    async def load(self, *, user_id: UUID, as_of: datetime) -> WorkingContext: ...
 
 
 class ConversationContextProvider(Protocol):
@@ -43,8 +42,7 @@ class ConversationContextProvider(Protocol):
         thread_id: UUID,
         exclude_turn_id: UUID,
         limit: int,
-    ) -> list[MessageView]:
-        ...
+    ) -> list[MessageView]: ...
 
 
 class MemoryContextProvider(Protocol):
@@ -53,8 +51,8 @@ class MemoryContextProvider(Protocol):
         *,
         user_id: UUID,
         current_input: str,
-    ) -> tuple[list[MemoryView], list[EpisodeView]]:
-        ...
+        as_of: datetime,
+    ) -> tuple[list[MemoryView], list[EpisodeView]]: ...
 
 
 class DomainWorkingContextProvider:
@@ -102,13 +100,14 @@ class SqlConversationContextProvider:
 
 
 class NullMemoryContextProvider:
-    """Phase 1 占位。Phase 4 替换为 Semantic/Episodic retriever，不改 Assembler。"""
+    """窄测试替身；生产装配禁止使用。"""
 
     async def load(
         self,
         *,
         user_id: UUID,
         current_input: str,
+        as_of: datetime,
     ) -> tuple[list[MemoryView], list[EpisodeView]]:
         return [], []
 

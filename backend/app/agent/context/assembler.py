@@ -5,7 +5,7 @@ ContextAssembler 只回答“上下文由什么组成”，不负责“数据怎
 
     WorkingContextProvider      当前目标 / 生效计划 / 最新跑者状态（热上下文）
     ConversationContextProvider 本线程中已提交 Turn 的历史消息
-    MemoryContextProvider       长期记忆（语义 + 情节），Phase 1 为空
+    MemoryContextProvider       长期记忆（语义 + 情节），受检索预算约束
 
 Phase 2 起 Assembler 不再装配 Tool：可见 Tool 由 Tool Runtime 的
 Resolver 每轮计算并传入 ReasoningContext。
@@ -24,6 +24,7 @@ SYSTEM_PROMPT = """你是长期跑步训练教练 Agent。
 当已有信息不足时，主动调用可见工具获取真实训练证据；可用工具不足时，先用 search_tools 搜索其他可用工具。
 不要声称获取了证据中不存在的数据。
 训练建议应说明主要判断依据。
+长期记忆是有来源的辅助认知；本轮用户明确输入与更新的工作上下文优先于冲突记忆。
 
 不要按固定流程或固定工具顺序执行；根据当前证据决定下一步。
 """
@@ -53,6 +54,7 @@ class ContextAssembler:
         semantic, episodic = await self._memory.load(
             user_id=request.user_id,
             current_input=request.current_input,
+            as_of=request.timestamp,
         )
         return ContextBundle(
             system=SYSTEM_PROMPT.strip(),

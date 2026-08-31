@@ -1,4 +1,5 @@
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,10 +28,16 @@ from app.infrastructure.database.base import Base
 from app.infrastructure.database.models.user import UserRow
 from app.infrastructure.database.session import create_session_factory, short_session
 
-TEST_DATABASE_URL = (
-    "postgresql+asyncpg://run_coach:run_coach@localhost:5433/run_coach_test"
+# 测试数据库地址允许用环境变量覆盖：默认端口 5433 可能被本机其他
+# PostgreSQL 实例（如 WSL 转发）占用，此时把容器映射到其他回环地址。
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://run_coach:run_coach@localhost:5433/run_coach_test",
 )
-ADMIN_DATABASE_URL = "postgresql+asyncpg://run_coach:run_coach@localhost:5433/postgres"
+ADMIN_DATABASE_URL = os.environ.get(
+    "ADMIN_DATABASE_URL",
+    "postgresql+asyncpg://run_coach:run_coach@localhost:5433/postgres",
+)
 TEST_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -67,9 +74,7 @@ async def engine(test_settings: Settings) -> AsyncIterator[AsyncEngine]:
     finally:
         await admin.dispose()
 
-    engine = create_async_engine(
-        test_settings.database_url, pool_pre_ping=True, poolclass=NullPool
-    )
+    engine = create_async_engine(test_settings.database_url, pool_pre_ping=True, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.execute(text("DROP SCHEMA public CASCADE"))
         await conn.execute(text("CREATE SCHEMA public"))
@@ -122,9 +127,21 @@ def token_for(user_id: UUID, settings: Settings, clock: FrozenClock | None = Non
 async def make_app(test_settings: Settings, clock: FrozenClock, engine: AsyncEngine):
     apps: list = []
 
-    def _make(*, reasoner=None):
+    def _make(
+        *,
+        reasoner=None,
+        memory_extractor=None,
+        embedding_provider=None,
+        episode_detector=None,
+    ):
         app = create_app(
-            test_settings, reasoner=reasoner, clock=clock, poolclass=NullPool
+            test_settings,
+            reasoner=reasoner,
+            clock=clock,
+            poolclass=NullPool,
+            memory_extractor=memory_extractor,
+            embedding_provider=embedding_provider,
+            episode_detector=episode_detector,
         )
         apps.append(app)
         return app

@@ -14,6 +14,7 @@ from app.agent.models.message import Message, MessageRole
 from app.agent.models.run import AgentRunStatus
 from app.agent.models.thread import Thread
 from app.agent.models.turn import TurnStatus
+from app.agent.ports.conversation_reader import CommittedTurnMessages
 from app.agent.ports.conversation_store import CommittedTurn, StartedTurn
 from app.common.clock import Clock
 from app.common.errors import ForbiddenError, NotFoundError
@@ -276,3 +277,46 @@ class SqlAlchemyConversationReader:
             rows = list((await session.scalars(stmt)).all())
             rows.reverse()
             return [message_from_row(row) for row in rows]
+
+    async def get_committed_turn_messages(
+        self,
+        *,
+        user_id: UUID,
+        turn_id: UUID,
+    ) -> CommittedTurnMessages | None:
+        """读取一个已提交 Turn 的 canonical user / assistant 消息。"""
+        turn_stmt = select(TurnRow).where(
+            TurnRow.id == turn_id,
+            TurnRow.user_id == user_id,
+            TurnRow.status == TurnStatus.COMMITTED.value,
+        )
+        async with short_session(self._sessions) as session:
+            turn = await session.scalar(turn_stmt)
+            if turn is None or turn.assistant_message_id is None or turn.committed_at is None:
+                return None
+            rows = list(
+                (
+                    await session.scalars(
+                        select(MessageRow).where(
+                            MessageRow.turn_id == turn_id,
+                            MessageRow.id.in_((turn.user_message_id, turn.assistant_message_id)),
+                        )
+                    )
+                ).all()
+            )
+            by_id = {row.id: row for row in rows}
+            if turn.user_message_id not in by_id or turn.assistant_message_id not in by_id:
+                return None
+            user_message = message_from_row(by_id[turn.user_message_id])
+            assistant_message = message_from_row(by_id[turn.assistant_message_id])
+            if (
+                user_message.role is not MessageRole.USER
+                or assistant_message.role is not MessageRole.ASSISTANT
+            ):
+                return None
+            return CommittedTurnMessages(
+                turn_id=turn.id,
+                user_message=user_message,
+                assistant_message=assistant_message,
+                committed_at=turn.committed_at,
+            )
