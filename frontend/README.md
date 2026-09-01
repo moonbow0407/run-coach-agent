@@ -20,7 +20,7 @@ alembic upgrade head                     # 建表
 uvicorn app.main:app --reload            # 默认 8000 端口
 
 # 2. 演示数据与令牌
-python scripts/seed_vertical_slice.py    # 输出 user_id
+python scripts/seed_demo.py              # 输出 user_id
 python scripts/issue_token.py <user_id>  # 输出 JWT
 
 # 3. 前端

@@ -40,7 +40,7 @@ uv run arq app.workers.arq_worker.WorkerSettings
 ## 演示数据与访问令牌
 
 ```powershell
-uv run python scripts/seed_vertical_slice.py
+uv run python scripts/seed_demo.py
 uv run python scripts/issue_token.py <user_id>
 ```
 

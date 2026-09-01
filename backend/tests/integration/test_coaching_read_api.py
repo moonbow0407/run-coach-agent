@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.agent.models.action import FinalAction, ToolCallAction
 from app.agent.reasoning.scripted import ScriptedReasoner
+from app.common.ids import new_id
 from tests.durable import drain_durable_tasks
 from tests.helpers import request_context_for
 
@@ -13,6 +14,7 @@ READ_ROUTES = (
     "/api/v1/plans/active",
     "/api/v1/athlete-state/latest",
     "/api/v1/plan-changes/pending",
+    "/api/v1/plan-changes/unresolved",
 )
 
 
@@ -169,3 +171,40 @@ async def test_pending_plan_change_discovery_and_resolution(
 
         resolved = await client.get("/api/v1/plan-changes/pending", headers=slice_auth_header)
         assert resolved.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_pending_route_does_not_expose_draft(
+    make_app,
+    slice_seed,
+    clock,
+    slice_auth_header,
+) -> None:
+    """/pending 只返回真正可确认的提案，DRAFT 通过 /unresolved 展示。"""
+    app = make_app()
+    await app.state.athlete_recompute_service.recompute(
+        user_id=slice_seed.user_id, as_of=clock.now()
+    )
+    change, _ = await app.state.plan_adaptation_service.propose_reduce_upcoming_load(
+        user_id=slice_seed.user_id,
+        turn_id=new_id(),
+        run_id=new_id(),
+        as_of=clock.now(),
+        based_on_plan_version=1,
+        based_on_state_version=2,
+        horizon_days=7,
+        reason="高疲劳先降低后续负荷",
+    )
+    assert change.status.value == "draft"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        pending = await client.get("/api/v1/plan-changes/pending", headers=slice_auth_header)
+        unresolved = await client.get(
+            "/api/v1/plan-changes/unresolved", headers=slice_auth_header
+        )
+
+    assert pending.status_code == 404
+    assert unresolved.status_code == 200
+    assert unresolved.json()["status"] == "draft"

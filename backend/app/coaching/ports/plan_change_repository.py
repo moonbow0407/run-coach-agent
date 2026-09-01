@@ -12,6 +12,9 @@ class PlanChangeRepository(Protocol):
     async def get_unresolved(self, *, user_id: UUID) -> PlanChange | None:
         ...
 
+    async def get_pending(self, *, user_id: UUID) -> PlanChange | None:
+        ...
+
     async def list_by_turn(
         self,
         *,

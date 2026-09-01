@@ -46,7 +46,7 @@ export function TokenGate({ onConnected }: { onConnected: (token: string) => voi
 
       <ol className="mt-6 space-y-2 rounded-lg border border-hairline bg-paper p-4 text-sm leading-relaxed">
         <li>
-          <code className="font-mono text-xs">python scripts/seed_vertical_slice.py</code>
+          <code className="font-mono text-xs">python scripts/seed_demo.py</code>
           <span className="ml-1 text-mist">—— 写入演示数据</span>
         </li>
         <li>

@@ -17,6 +17,25 @@ async function getOrNull<T>(path: string): Promise<T | null> {
   }
 }
 
+const PLAN_CHANGE_POLL_DELAYS_MS = [1000, 2000, 4000] as const;
+
+async function getUnresolvedPlanChange(): Promise<PlanChange | null> {
+  return getOrNull<PlanChange>("/api/v1/plan-changes/unresolved");
+}
+
+async function waitForPlanChangeSettlement(
+  initial: PlanChange | null,
+): Promise<PlanChange | null> {
+  let change = initial;
+  for (const delay of PLAN_CHANGE_POLL_DELAYS_MS) {
+    if (change === null || change.status !== "draft") return change;
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, delay);
+    });
+    change = await getUnresolvedPlanChange();
+  }
+  return change;
+}
 export interface TrainingData {
   goal: ActiveGoal | null;
   plan: ActivePlan | null;
@@ -50,7 +69,7 @@ export function useTrainingData(enabled: boolean): TrainingData {
         getOrNull<ActivePlan>("/api/v1/plans/active"),
         getOrNull<AthleteState>("/api/v1/athlete-state/latest"),
         getOrNull<WorkoutList>("/api/v1/workouts?days=30"),
-        getOrNull<PlanChange>("/api/v1/plan-changes/pending"),
+        getUnresolvedPlanChange(),
       ]);
       setGoal(goalData);
       setPlan(planData);
@@ -70,10 +89,11 @@ export function useTrainingData(enabled: boolean): TrainingData {
 
   const reloadAfterRun = useCallback(async () => {
     try {
-      const [stateData, pendingData] = await Promise.all([
+      const [stateData, initialChange] = await Promise.all([
         getOrNull<AthleteState>("/api/v1/athlete-state/latest"),
-        getOrNull<PlanChange>("/api/v1/plan-changes/pending"),
+        getUnresolvedPlanChange(),
       ]);
+      const pendingData = await waitForPlanChangeSettlement(initialChange);
       setState(stateData);
       setPendingChange(pendingData);
     } catch {
@@ -85,7 +105,7 @@ export function useTrainingData(enabled: boolean): TrainingData {
     try {
       const [planData, pendingData] = await Promise.all([
         getOrNull<ActivePlan>("/api/v1/plans/active"),
-        getOrNull<PlanChange>("/api/v1/plan-changes/pending"),
+        getUnresolvedPlanChange(),
       ]);
       setPlan(planData);
       setPendingChange(pendingData);

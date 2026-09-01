@@ -77,7 +77,7 @@ export function useChat(
   const send = useCallback(
     async (text: string) => {
       const content = text.trim();
-      if (!content || run.phase !== "idle") return;
+      if (!content || (run.phase !== "idle" && run.phase !== "failed")) return;
       setMessages((prev) => [
         ...prev,
         { id: `local-${Date.now()}`, role: "user", content, created_at: new Date().toISOString() },

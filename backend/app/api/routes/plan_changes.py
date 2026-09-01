@@ -47,6 +47,20 @@ async def get_pending_plan_change(
     return to_plan_change_response(change)
 
 
+@router.get("/api/v1/plan-changes/unresolved", response_model=PlanChangeResponse)
+async def get_unresolved_plan_change(
+    request_context: Annotated[RequestContext, Depends(get_request_context)],
+    request: Request,
+) -> PlanChangeResponse:
+    """读取该用户唯一未解决的提案，供训练台展示异步收尾状态。"""
+    try:
+        change = await _adaptation(request).get_unresolved(
+            user_id=request_context.user_id
+        )
+    except RunCoachError as exc:
+        raise to_http_error(exc) from exc
+    return to_plan_change_response(change)
+
 @router.get("/api/v1/plan-changes/{plan_change_id}", response_model=PlanChangeResponse)
 async def get_plan_change(
     plan_change_id: UUID,

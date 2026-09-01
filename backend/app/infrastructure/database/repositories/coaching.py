@@ -242,6 +242,20 @@ class SqlAlchemyPlanChangeRepository:
             row = await session.scalar(stmt)
             return plan_change_from_row(row) if row else None
 
+    async def get_pending(self, *, user_id: UUID) -> PlanChange | None:
+        stmt = (
+            select(PlanChangeRow)
+            .where(
+                PlanChangeRow.user_id == user_id,
+                PlanChangeRow.status == PlanChangeStatus.PENDING_CONFIRMATION.value,
+            )
+            .order_by(PlanChangeRow.created_at.desc())
+            .limit(1)
+        )
+        async with short_session(self._sessions) as session:
+            row = await session.scalar(stmt)
+            return plan_change_from_row(row) if row else None
+
     async def list_by_turn(self, *, user_id: UUID, turn_id: UUID) -> list[PlanChange]:
         stmt = (
             select(PlanChangeRow)

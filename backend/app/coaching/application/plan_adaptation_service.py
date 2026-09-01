@@ -99,14 +99,16 @@ class PlanAdaptationService:
             raise NotFoundError("计划调整不存在")
         return change
 
-    async def get_pending(self, *, user_id: UUID) -> PlanChange:
-        """读取该用户唯一未解决的提案（draft / pending_confirmation）。
-
-        每用户至多一条未解决提案是领域不变量（部分唯一索引），
-        因此这里不需要列表语义；没有未解决提案时按 NotFound 报告，
-        由前端渲染为“没有待确认调整”的空状态。
-        """
+    async def get_unresolved(self, *, user_id: UUID) -> PlanChange:
+        """读取该用户唯一未解决的提案，包含 DRAFT 与待确认状态。"""
         change = await self._changes.get_unresolved(user_id=user_id)
+        if change is None:
+            raise NotFoundError("没有未解决的计划调整")
+        return change
+
+    async def get_pending(self, *, user_id: UUID) -> PlanChange:
+        """只读取真正等待用户确认的提案，不暴露 DRAFT。"""
+        change = await self._changes.get_pending(user_id=user_id)
         if change is None:
             raise NotFoundError("没有待确认的计划调整")
         return change

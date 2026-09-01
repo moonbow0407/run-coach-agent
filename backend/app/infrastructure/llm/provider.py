@@ -60,6 +60,7 @@ class OpenAICompatibleProvider:
                 }
                 for tool in request.tools
             ]
+            kwargs["parallel_tool_calls"] = False
         try:
             response = await self._client.chat.completions.create(**kwargs)
         except APIError as exc:

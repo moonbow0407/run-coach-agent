@@ -93,6 +93,19 @@ def _candidate(raw: dict[str, object], committed_at: datetime) -> ExtractedSeman
     value = raw["value"]
     if isinstance(value, list):
         value = tuple(value)
+    elif isinstance(value, dict) and set(value) == {"entries"}:
+        raw_entries = value["entries"]
+        if not isinstance(raw_entries, list):
+            raise InfrastructureError("memory_extraction_invalid_response")
+        structured_value: dict[str, object] = {}
+        for entry in raw_entries:
+            if not isinstance(entry, dict) or set(entry) != {"key", "value"}:
+                raise InfrastructureError("memory_extraction_invalid_response")
+            key = entry["key"]
+            if not isinstance(key, str) or key in structured_value:
+                raise InfrastructureError("memory_extraction_invalid_response")
+            structured_value[key] = entry["value"]
+        value = structured_value
     return ExtractedSemanticCandidate(
         type=SemanticMemoryType(str(raw["type"])),
         origin=MemoryOrigin.EXPLICIT,
@@ -116,6 +129,15 @@ def _parse_time(raw: object, default: datetime) -> datetime:
 
 
 def _extractor_schema(types: tuple[str, ...]) -> dict[str, object]:
+    scalar = {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "number"},
+            {"type": "integer"},
+            {"type": "boolean"},
+            {"type": "null"},
+        ]
+    }
     return {
         "type": "object",
         "additionalProperties": False,
@@ -123,7 +145,6 @@ def _extractor_schema(types: tuple[str, ...]) -> dict[str, object]:
         "properties": {
             "candidates": {
                 "type": "array",
-                "maxItems": 8,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
@@ -137,21 +158,43 @@ def _extractor_schema(types: tuple[str, ...]) -> dict[str, object]:
                     ],
                     "properties": {
                         "type": {"type": "string", "enum": list(types)},
-                        "subject_key": {"type": "string", "maxLength": 120},
+                        "subject_key": {"type": "string"},
                         "value": {
                             "anyOf": [
-                                {"type": "string", "maxLength": 160},
+                                {"type": "string"},
                                 {"type": "number"},
                                 {"type": "integer"},
                                 {"type": "boolean"},
                                 {"type": "null"},
-                                {"type": "array", "maxItems": 8},
-                                {"type": "object", "maxProperties": 8},
+                                {"type": "array", "items": scalar},
+                                {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": ["entries"],
+                                    "properties": {
+                                        "entries": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "additionalProperties": False,
+                                                "required": ["key", "value"],
+                                                "properties": {
+                                                    "key": {"type": "string"},
+                                                    "value": scalar,
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
                             ]
                         },
-                        "content": {"type": "string", "maxLength": 240},
-                        "valid_from": {"type": ["string", "null"]},
-                        "valid_until": {"type": ["string", "null"]},
+                        "content": {"type": "string"},
+                        "valid_from": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}]
+                        },
+                        "valid_until": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}]
+                        },
                     },
                 },
             }

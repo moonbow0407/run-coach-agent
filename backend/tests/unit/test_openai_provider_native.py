@@ -109,6 +109,7 @@ async def test_request_translates_five_message_kinds() -> None:
     assert messages[4]["role"] == "tool"
     assert messages[4]["tool_call_id"] == "call_1"
     assert kwargs["tools"][0]["function"]["name"] == "get_recent_workouts"
+    assert kwargs["parallel_tool_calls"] is False
     assert "response_format" not in kwargs
 
 

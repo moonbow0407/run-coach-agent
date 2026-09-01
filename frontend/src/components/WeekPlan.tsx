@@ -134,15 +134,18 @@ export function WeekPlan({
     );
   }
 
-  const week = buildWeek(plan, pendingChange);
-  const decisions = pendingChange?.payload.changes ?? [];
+  const pendingDecision =
+    pendingChange?.status === "pending_confirmation" ? pendingChange : null;
+  const week = buildWeek(plan, pendingDecision);
+  const decisions = pendingDecision?.payload.changes ?? [];
+  const isPreparing = pendingChange?.status === "draft";
 
   const decide = async (action: "confirm" | "reject") => {
-    if (!pendingChange || busy) return;
+    if (!pendingDecision || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await apiPost(`/api/v1/plan-changes/${pendingChange.id}/${action}`);
+      await apiPost(`/api/v1/plan-changes/${pendingDecision.id}/${action}`);
       await onDecided();
     } catch (err) {
       setError(err instanceof Error ? err.message : "操作失败");
@@ -178,15 +181,24 @@ export function WeekPlan({
         ))}
       </div>
 
-      {pendingChange ? (
+      {isPreparing ? (
+        <div className="mt-4 rounded-lg border border-hairline bg-fog p-3.5">
+          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-mist">
+            调整准备中
+          </p>
+          <p className="mt-1.5 text-sm leading-relaxed text-mist">
+            教练的建议正在准备确认，按钮会在后台处理完成后出现。
+          </p>
+        </div>
+      ) : pendingDecision ? (
         <div className="mt-4 rounded-lg border border-track/50 bg-track-wash p-3.5">
           <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-track">
             等你的决定 · 红铅笔批注
           </p>
           <p className="mt-1.5 text-sm font-medium text-asphalt">
-            教练建议下调未来 {pendingChange.payload.horizon_days} 天的负荷
+            教练建议下调未来 {pendingDecision.payload.horizon_days} 天的负荷
           </p>
-          <p className="mt-1 text-sm leading-relaxed text-mist">{pendingChange.reason}</p>
+          <p className="mt-1 text-sm leading-relaxed text-mist">{pendingDecision.reason}</p>
 
           <ul className="mt-3 space-y-1.5">
             {decisions.map((change) => (
