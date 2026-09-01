@@ -11,7 +11,7 @@
 
 import asyncio
 import logging
-from typing import Annotated
+from typing import Annotated, Any, AsyncGenerator
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -98,7 +98,7 @@ async def chat_stream(
     dispatcher = _dispatcher(request)
     dispatcher.subscribe(listener)
 
-    async def generate() -> object:
+    async def generate() -> AsyncGenerator[str, Any]:
         # 后台执行一轮对话；本生成器只负责把事件转发成 SSE。
         task = asyncio.create_task(
             _chat_service(request).send_message(

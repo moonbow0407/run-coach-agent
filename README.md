@@ -53,6 +53,16 @@ Canonical Fact、Derived State 与 Memory 的边界以 [`docs/ARCHITECTURE.md`](
 
 ## 快速启动
 
+### 0. 一键启动（推荐）
+
+在项目根目录执行即可拉起完整开发环境。脚本会依次完成目录与命令校验、`.env` 检查、PostgreSQL/Redis 与端口检查、依赖同步、数据库迁移，然后为 API、Worker、前端各开一个独立终端窗口并等待就绪：
+
+```powershell
+.\scripts\start.ps1
+```
+
+常用参数：`-Mode backend|api|worker|frontend` 只启动部分服务，`-NoDeps` / `-NoMigrate` / `-NoChecks` 跳过对应阶段，`-Seed` 在就绪后写入演示数据。完整说明见脚本头注释，或运行 `Get-Help .\scripts\start.ps1 -Full`。
+
 ### 1. 准备数据库
 
 使用本地 PostgreSQL（需已安装 pgvector 扩展）。首次使用时创建应用数据库：
