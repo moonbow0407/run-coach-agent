@@ -80,7 +80,7 @@ uv run arq app.workers.arq_worker.WorkerSettings
 
 编辑 `backend/.env` 时至少需要：
 
-- 如本地 PostgreSQL 的账号、密码或端口与模板默认值（`postgres` / `localhost:5432`）不同，修改 `DATABASE_URL`；
+- 将 `DATABASE_URL` 中的 `<密码>` 替换为本机 PostgreSQL 的密码；账号、端口或数据库名与模板默认值（`postgres` / `localhost:5432` / `run_coach`）不同时一并修改；
 - 如 Redis 地址或逻辑库不同，修改 `REDIS_URL`；API 可在 Redis 短暂停机时继续提交 canonical state 与 Outbox，恢复后 Worker 会追赶。
 - 为 `JWT_SECRET` 设置不少于 32 个字符的随机值；
 - 真实对话与 Memory 投影需配置 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。兼容端点需要支持原生 tool calling 和配置的 embedding 模型。
@@ -113,7 +113,7 @@ cd backend
 uv run ruff check app tests
 ```
 
-完整测试需要支持 pgvector 的本地测试数据库，并要求本机 `localhost:6379` 可连接 Redis（真实 ARQ 场景使用独立逻辑库并在测试后清理）。fixture 会自动创建并清理 `run_coach_test`，默认连接 `localhost:5432`；本机实例连接信息不同时可覆盖：
+完整测试需要支持 pgvector 的本地测试数据库，并要求本机 `localhost:6379` 可连接 Redis（真实 ARQ 场景使用独立逻辑库并在测试后清理）。两个连接串含本机凭据，不写入仓库默认值，必须在运行 pytest 前通过环境变量显式提供；fixture 会用它们自动创建并清理 `run_coach_test`：
 
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql+asyncpg://postgres:<密码>@localhost:5432/run_coach_test"

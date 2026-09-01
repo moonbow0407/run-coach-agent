@@ -7,7 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """运行配置。敏感项（数据库地址、JWT 密钥、LLM Key）全部来自环境。"""
 
-    database_url: str = "postgresql+asyncpg://postgres:114514@localhost:5432/run_coach"
+    # 连接串含数据库凭据，不允许有默认值，必须由环境变量或 .env 提供
+    database_url: str
     redis_url: str = "redis://localhost:6379/0"
     worker_queue_name: str = "arq:queue"
     jwt_secret: str = Field(min_length=32)

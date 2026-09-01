@@ -28,24 +28,26 @@ from app.infrastructure.database.base import Base
 from app.infrastructure.database.models.user import UserRow
 from app.infrastructure.database.session import create_session_factory, short_session
 
-# 测试数据库地址允许用环境变量覆盖：默认连接本机 PostgreSQL（localhost:5432），
-# 当本机实例的地址、账号或密码不同时，通过环境变量指定。
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql+asyncpg://postgres:114514@localhost:5432/run_coach_test",
-)
-ADMIN_DATABASE_URL = os.environ.get(
-    "ADMIN_DATABASE_URL",
-    "postgresql+asyncpg://postgres:114514@localhost:5432/postgres",
-)
+# 测试数据库连接串含本机凭据，不允许默认值入库：必须通过环境变量显式提供
+# （README「验证」一节），且延迟到 fixture 内读取，保证只跑单元测试时无需配置。
 TEST_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"环境变量 {name} 未设置：集成/场景测试需要指向本机 PostgreSQL 的连接串，"
+            "运行 pytest 前请按 README「验证」一节显式导出"
+        )
+    return value
 
 
 @pytest.fixture(scope="session")
 def test_settings() -> Settings:
     return Settings(
-        database_url=TEST_DATABASE_URL,
+        database_url=_required_env("TEST_DATABASE_URL"),
         jwt_secret="test-secret-must-be-at-least-32-bytes",
         jwt_expire_seconds=3600,
         llm_api_key=None,
@@ -62,7 +64,9 @@ def clock() -> FrozenClock:
 @pytest.fixture(scope="session")
 async def engine(test_settings: Settings) -> AsyncIterator[AsyncEngine]:
     admin = create_async_engine(
-        ADMIN_DATABASE_URL, isolation_level="AUTOCOMMIT", poolclass=NullPool
+        _required_env("ADMIN_DATABASE_URL"),
+        isolation_level="AUTOCOMMIT",
+        poolclass=NullPool,
     )
     try:
         async with admin.connect() as conn:

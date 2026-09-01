@@ -19,9 +19,9 @@ FastAPI 后端已实现 Phase 1–5：Agent Core、Dynamic Tool Runtime、Coachi
 Copy-Item .env.example backend\.env
 ```
 
-复制配置后，按需修改 `backend/.env` 中的 `DATABASE_URL`（默认连接 `localhost:5432` 的本地实例）和 `REDIS_URL`（默认 `localhost:6379/0`），并填写不少于 32 个字符的 `JWT_SECRET`。应用数据库 `run_coach` 需提前创建，Redis-compatible server 需已启动。
+复制配置后，编辑 `backend/.env`：将 `DATABASE_URL` 中的 `<密码>` 替换为本机 PostgreSQL 密码（模板默认连接 `localhost:5432` 的 `run_coach` 库），按需调整 `REDIS_URL`（默认 `localhost:6379/0`），并填写不少于 32 个字符的 `JWT_SECRET`。应用数据库 `run_coach` 需提前创建，Redis-compatible server 需已启动。
 
-随后在 `backend/` 执行：
+随后在 `backend/` 执行（Alembic 的连接串同样来自 `DATABASE_URL` 环境变量或 `backend/.env`，不写入 `alembic.ini`）：
 
 ```powershell
 uv sync --extra dev
@@ -56,7 +56,7 @@ $env:ADMIN_DATABASE_URL = "postgresql+asyncpg://postgres:<密码>@localhost:5432
 uv run pytest -q
 ```
 
-测试默认使用同一本地实例上的 `run_coach_test` 数据库，fixture 会自动创建和清理；真实 ARQ 场景还连接本机 Redis 的隔离逻辑库并在结束后清理。本地 PostgreSQL 必须已安装 pgvector 扩展。
+测试数据库 `run_coach_test` 位于同一本地实例上，fixture 会自动创建和清理，连接串通过上方两个环境变量显式提供（含本机凭据，不写入仓库默认值）；真实 ARQ 场景还连接本机 Redis 的隔离逻辑库并在结束后清理。本地 PostgreSQL 必须已安装 pgvector 扩展。
 
 ## 模块边界
 
