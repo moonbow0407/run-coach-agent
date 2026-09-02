@@ -15,6 +15,7 @@ from app.infrastructure.seed.demo import seed_demo
 
 
 async def main() -> None:
+    """装配应用容器并写入演示数据；结束后释放数据库连接池。"""
     settings = Settings()
     container = build_container(settings, clock=SystemClock())
     try:
@@ -26,6 +27,7 @@ async def main() -> None:
             clock=container.clock,
         )
     finally:
+        # 无论写入成败都释放连接池。
         await container.engine.dispose()
     print(
         f"seeded demo user_id={seed.user_id} "

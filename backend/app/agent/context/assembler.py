@@ -18,6 +18,7 @@ from app.agent.context.providers import (
     WorkingContextProvider,
 )
 
+# 教练角色的 system 指令：每轮装配时原样注入 system 消息
 SYSTEM_PROMPT = """你是长期跑步训练教练 Agent。
 
 需要根据已提供的跑者状态和当前可见的工具完成当前任务。
@@ -31,6 +32,8 @@ SYSTEM_PROMPT = """你是长期跑步训练教练 Agent。
 
 
 class ContextAssembler:
+    """上下文装配器（ContextAssembler）：把三类信息组装成 ContextBundle。"""
+
     def __init__(
         self,
         working_context_provider: WorkingContextProvider,
@@ -38,19 +41,23 @@ class ContextAssembler:
         memory_context_provider: MemoryContextProvider,
         history_limit: int,
     ) -> None:
-        self._working = working_context_provider
-        self._conversation = conversation_context_provider
-        self._memory = memory_context_provider
-        self._history_limit = history_limit
+        self._working = working_context_provider  # 热上下文数据源
+        self._conversation = conversation_context_provider  # 历史对话数据源
+        self._memory = memory_context_provider  # 长期记忆数据源
+        self._history_limit = history_limit  # 历史消息条数上限
 
     async def assemble(self, request: ContextAssemblyRequest) -> ContextBundle:
+        """装配一次推理所需上下文：热上下文 + 已提交历史 + 长期记忆。"""
+        # 当前目标 / 生效计划 / 最新跑者状态（可能部分缺失）
         working = await self._working.load(user_id=request.user_id, as_of=request.timestamp)
+        # exclude_turn_id 排除当前轮：本轮输入已单独传入，避免重复
         recent = await self._conversation.load(
             user_id=request.user_id,
             thread_id=request.thread_id,
             exclude_turn_id=request.turn_id,
             limit=self._history_limit,
         )
+        # 语义记忆 + 情节记忆，均由 Provider 按预算检索
         semantic, episodic = await self._memory.load(
             user_id=request.user_id,
             current_input=request.current_input,

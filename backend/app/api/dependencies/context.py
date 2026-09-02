@@ -22,14 +22,15 @@ from app.infrastructure.database.session import short_session
 
 async def get_request_context(
     request: Request,
-    authorization: Annotated[str | None, Header()] = None,
-    x_request_id: Annotated[str | None, Header()] = None,
-    x_trace_id: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,  # Bearer JWT 令牌
+    x_request_id: Annotated[str | None, Header()] = None,  # 网关传入的请求 ID（可选）
+    x_trace_id: Annotated[str | None, Header()] = None,  # 跨服务链路追踪 ID（可选）
 ) -> RequestContext:
     """Bearer Token → user_id → RequestContext。
 
     request_id / trace_id 优先取请求头（便于跨服务串联），否则现场生成。
     """
+    # 缺少 Bearer 头：请求未认证。
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少认证令牌")
     token = authorization.split(" ", 1)[1].strip()
@@ -42,6 +43,7 @@ async def get_request_context(
             algorithm=settings.jwt_algorithm,
         )
     except AuthenticationError as exc:
+        # 令牌签名 / 格式不合法：按 401 处理。
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     # 令牌合法不代表账号仍存在：再查一次用户表，防止已删除用户持旧令牌访问。
@@ -59,6 +61,7 @@ async def get_request_context(
 
 
 def _header_uuid(value: str | None) -> UUID | None:
+    """把请求头解析为 UUID；非法值视为未提供（调用方会现场生成新 ID）。"""
     if not value:
         return None
     try:

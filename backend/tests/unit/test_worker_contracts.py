@@ -44,6 +44,7 @@ NOW = datetime(2026, 8, 31, 8, 0, tzinfo=UTC)
 
 
 def test_all_seven_event_schemas_have_fixed_v1_routes() -> None:
+    """验证：七种事件到 worker 任务的静态路由表——同一事件永远映射同一任务序列。"""
     routes = {
         event.event_type: tuple(task.task_name for task in route_event(event, enqueued_at=NOW))
         for event in _events()
@@ -60,6 +61,7 @@ def test_all_seven_event_schemas_have_fixed_v1_routes() -> None:
 
 
 def test_task_codec_is_strict_and_schema_version_mismatch_is_rejected() -> None:
+    """验证：任务信令可无损 round-trip；未知字段与不支持的 schema 版本均被拒绝。"""
     task = route_event(_events()[0], enqueued_at=NOW)[0]
     assert WorkerTaskEnvelope.from_dict(task.to_dict()) == task
     malformed = task.to_dict()
@@ -71,6 +73,7 @@ def test_task_codec_is_strict_and_schema_version_mismatch_is_rejected() -> None:
 
 
 def test_retry_schedule_is_deterministic_and_bounded() -> None:
+    """验证：重试延迟由 (attempt, event_id) 确定性生成（可复现）、带抖动且有上限。"""
     event_id = new_id()
     first = retry_delay(attempt=1, event_id=event_id)
     assert first == retry_delay(attempt=1, event_id=event_id)
@@ -80,6 +83,7 @@ def test_retry_schedule_is_deterministic_and_bounded() -> None:
 
 
 def _events():
+    """构造覆盖全部七种事件类型的样例事件（Turn 终态 + coaching + 记忆投影）。"""
     user_id = new_id()
     metadata = EventMetadata(correlation_id=new_id(), trace_id=new_id())
     turn_id = new_id()

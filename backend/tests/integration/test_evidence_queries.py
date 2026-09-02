@@ -17,6 +17,7 @@ AS_OF = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 
 
 async def _user(sessions: async_sessionmaker[AsyncSession], now: datetime) -> UUID:
+    """新建一个最小用户行并返回其 id。"""
     uid = new_id()
     async with short_session(sessions, commit=True) as session:
         session.add(UserRow(id=uid, created_at=now, updated_at=now))
@@ -28,10 +29,12 @@ async def test_list_between_excludes_future_and_respects_start(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：区间查询只返回窗口内的课次——as_of 之后的未来课次与过旧课次都被排除。"""
     user_id = await _user(sessions, clock.now())
     past = new_id()
     future = new_id()
     too_old = new_id()
+    # 写入三节课：窗口外过旧、窗口内、窗口外未来。
     async with short_session(sessions, commit=True) as session:
         session.add(
             WorkoutRow(
@@ -98,6 +101,7 @@ async def test_list_feedback_for_workouts_is_batched(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：批量反馈查询一次取回全部指定课次的反馈，不做逐条 N+1 查询语义。"""
     user_id = await _user(sessions, clock.now())
     workout_ids = [new_id(), new_id(), new_id()]
     async with short_session(sessions, commit=True) as session:
@@ -220,6 +224,7 @@ async def test_list_between_is_user_isolated(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：区间查询按 user_id 隔离，A 查不到 B 的课次。"""
     user_a = await _user(sessions, clock.now())
     user_b = await _user(sessions, clock.now())
     async with short_session(sessions, commit=True) as session:

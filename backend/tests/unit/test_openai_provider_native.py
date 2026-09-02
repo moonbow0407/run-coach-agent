@@ -19,6 +19,8 @@ from app.infrastructure.llm.provider import OpenAICompatibleProvider
 
 
 class FakeCompletions:
+    """SDK completions 替身：捕获请求参数，回放预置响应或抛出异常。"""
+
     def __init__(self, response) -> None:
         self._response = response
         self.captured_kwargs: dict | None = None
@@ -31,23 +33,31 @@ class FakeCompletions:
 
 
 class FakeClient:
+    """SDK client 替身：只提供 chat.completions 入口。"""
+
     def __init__(self, response) -> None:
         self.chat = type("Chat", (), {"completions": FakeCompletions(response)})()
 
 
 class FakeMessage:
+    """assistant 消息替身：文本与 tool_calls 二选一。"""
+
     def __init__(self, content=None, tool_calls=None) -> None:
         self.content = content
         self.tool_calls = tool_calls
 
 
 class FakeFunction:
+    """tool function 替身：名称 + JSON 字符串形式的参数。"""
+
     def __init__(self, name: str, arguments: str) -> None:
         self.name = name
         self.arguments = arguments
 
 
 class FakeToolCall:
+    """tool call 替身：字段名与 OpenAI 原生协议保持一致。"""
+
     def __init__(self, call_id: str, name: str, arguments: str) -> None:
         self.id = call_id
         self.type = "function"
@@ -55,11 +65,15 @@ class FakeToolCall:
 
 
 class FakeChoice:
+    """choice 替身：包一层 message，模拟响应结构。"""
+
     def __init__(self, message) -> None:
         self.message = message
 
 
 class FakeResponse:
+    """completion 响应替身：单 choice，usage 缺省。"""
+
     def __init__(self, message, model: str = "fake-model") -> None:
         self.choices = [FakeChoice(message)]
         self.model = model
@@ -67,12 +81,14 @@ class FakeResponse:
 
 
 def _provider(response) -> tuple[OpenAICompatibleProvider, FakeClient]:
+    """组装被测 Provider 与替身 client；返回 client 以便断言捕获的请求参数。"""
     client = FakeClient(response)
     return OpenAICompatibleProvider(client=client, model="fake-model"), client  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
 async def test_request_translates_five_message_kinds() -> None:
+    """验证：五种内部消息类型逐一映射为 OpenAI 消息协议，工具定义随请求传参。"""
     provider, client = _provider(FakeResponse(FakeMessage(content="好的")))
     request = ModelRequest(
         messages=(
@@ -115,6 +131,7 @@ async def test_request_translates_five_message_kinds() -> None:
 
 @pytest.mark.asyncio
 async def test_response_tool_calls_parsed_to_model_tool_call() -> None:
+    """验证：原生 tool call 响应解析回内部 ModelToolCall（参数 JSON 反序列化）。"""
     raw = FakeToolCall("call_9", "get_workout_feedback", '{"workout_id": "abc"}')
     provider, _ = _provider(FakeResponse(FakeMessage(tool_calls=[raw])))
     response = await provider.generate(ModelRequest(messages=(SystemMessage(content="s"),)))
@@ -127,6 +144,7 @@ async def test_response_tool_calls_parsed_to_model_tool_call() -> None:
 
 @pytest.mark.asyncio
 async def test_unparsable_arguments_is_protocol_failure() -> None:
+    """验证：参数不是合法 JSON 视为协议失败，不猜测意图。"""
     raw = FakeToolCall("call_1", "get_recent_workouts", "not-json{")
     provider, _ = _provider(FakeResponse(FakeMessage(tool_calls=[raw])))
     with pytest.raises(ReasonerError, match="无法解析"):
@@ -135,6 +153,7 @@ async def test_unparsable_arguments_is_protocol_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_non_object_arguments_is_protocol_failure() -> None:
+    """验证：参数是合法 JSON 但不是对象（如数组），同样拒绝。"""
     raw = FakeToolCall("call_1", "get_recent_workouts", "[1, 2, 3]")
     provider, _ = _provider(FakeResponse(FakeMessage(tool_calls=[raw])))
     with pytest.raises(ReasonerError, match="不是 JSON 对象"):
@@ -143,6 +162,7 @@ async def test_non_object_arguments_is_protocol_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_empty_response_fails() -> None:
+    """验证：空文本响应视为失败，不产出空 Action。"""
     provider, _ = _provider(FakeResponse(FakeMessage(content="")))
     with pytest.raises(ReasonerError, match="空输出"):
         await provider.generate(ModelRequest(messages=(SystemMessage(content="s"),)))
@@ -150,6 +170,7 @@ async def test_empty_response_fails() -> None:
 
 @pytest.mark.asyncio
 async def test_api_error_normalized_to_infrastructure_error() -> None:
+    """验证：SDK 异常归一化为 InfrastructureError，不向外泄漏 SDK 类型。"""
     provider, _ = _provider(APIError("boom", request=None, body=None))  # type: ignore[arg-type]
     with pytest.raises(InfrastructureError):
         await provider.generate(ModelRequest(messages=(SystemMessage(content="s"),)))
@@ -157,6 +178,7 @@ async def test_api_error_normalized_to_infrastructure_error() -> None:
 
 @pytest.mark.asyncio
 async def test_no_tools_no_tools_parameter() -> None:
+    """验证：无工具时不发送 tools 参数（部分兼容网关拒绝空数组）。"""
     provider, client = _provider(FakeResponse(FakeMessage(content="ok")))
     await provider.generate(ModelRequest(messages=(UserMessage(content="hi"),)))
     assert "tools" not in client.chat.completions.captured_kwargs

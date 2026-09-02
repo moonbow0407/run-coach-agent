@@ -27,11 +27,15 @@ class TerminalTurnFinalizationService:
         turn_id: UUID,
         terminal_status: TurnStatus,
     ) -> None:
+        """校验 durable event 与 canonical Turn 一致后，执行计划草案收尾。"""
+        # 事件声称的 Turn 在 canonical 读取侧不存在：数据不一致，拒绝投影。
         turn = await self._conversations.get_turn(user_id=user_id, turn_id=turn_id)
         if turn is None:
             raise NotFoundError("canonical_turn_source_not_found")
+        # 事件携带的终态与 canonical Turn 实际状态不一致，同样拒绝投影。
         if turn.status is not terminal_status:
             raise DomainError("canonical_turn_status_mismatch")
+        # Turn 提交成功：草案推进到待确认；Turn 失败 / 中止：草案直接作废。
         if terminal_status is TurnStatus.COMMITTED:
             await self._plan_adaptation.promote_draft_for_turn(
                 user_id=user_id,

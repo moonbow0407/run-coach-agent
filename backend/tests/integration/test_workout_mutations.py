@@ -40,6 +40,7 @@ def _metadata() -> EventMetadata:
 def _feedback_service(
     sessions: async_sessionmaker[AsyncSession], clock: FrozenClock
 ) -> WorkoutFeedbackCommandService:
+    """组装反馈命令服务：mutation store 内含 OutboxWriter，数据与事件同事务落库。"""
     return WorkoutFeedbackCommandService(
         SqlAlchemyWorkoutMutationStore(sessions, OutboxWriter()),
         clock,
@@ -51,6 +52,7 @@ async def test_feedback_record_and_update_write_versioned_outbox(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：反馈新增与更新各写一条 versioned outbox 事件（recorded/updated），行时间戳符合 append 语义。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     service = _feedback_service(sessions, clock)
@@ -77,6 +79,7 @@ async def test_feedback_record_and_update_write_versioned_outbox(
         event_metadata=_metadata(),
     )
     assert updated.created_at == feedback.created_at
+    # update 是就地更新同一行：created_at 不变，仅 updated_at 前移。
     assert updated.updated_at == clock.now()
 
     async with short_session(sessions) as session:
@@ -101,9 +104,11 @@ async def test_feedback_record_revalidates_workout_owner(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：写反馈前重新校验课次归属，给他人课次写反馈按 NotFound 拒绝。"""
     async with short_session(sessions, commit=True) as session:
         seed_a = await seed_vertical_slice(session)
         seed_b = await seed_vertical_slice(session)
+    # pytest.raises：断言抛出带 workout_not_found 错误码的 NotFoundError。
     with pytest.raises(NotFoundError, match="workout_not_found"):
         await _feedback_service(sessions, clock).record(
             user_id=seed_b.user_id,
@@ -119,6 +124,8 @@ async def test_feedback_record_revalidates_workout_owner(
 
 
 class _FailingOutboxWriter(OutboxWriter):
+    """故障注入桩：add 时强制抛错，模拟 outbox 写入失败。"""
+
     def add(self, session: AsyncSession, event) -> None:
         raise RuntimeError("forced_outbox_failure")
 
@@ -129,6 +136,7 @@ async def test_workout_row_rolls_back_when_outbox_write_fails(
     clock: FrozenClock,
     user_id: UUID,
 ) -> None:
+    """验证：outbox 写失败时课次行随同一事务回滚——不出现"有数据无事件"的半状态。"""
     service = WorkoutCommandService(
         SqlAlchemyWorkoutMutationStore(sessions, _FailingOutboxWriter()),
         clock,

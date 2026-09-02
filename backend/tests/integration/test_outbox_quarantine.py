@@ -25,12 +25,14 @@ async def test_unknown_schema_is_quarantined_without_queue_delivery(
     user_id,
     clock,
 ) -> None:
+    """验证：未知 schema_version 的事件被直接隔离——不投递队列、不进入无限重试，错误码落库。"""
     valid = new_turn_terminal_event(
         event_type=TURN_FAILED_V1,
         user_id=user_id,
         payload=TurnTerminalV1(new_id(), new_id(), new_id(), clock.now()),
         metadata=EventMetadata(correlation_id=new_id()),
     )
+    # replace：dataclass 拷贝工具，这里用它伪造一个未来 schema 版本的毒事件。
     poison = replace(valid, schema_version=99)
     async with sessions.begin() as session:
         OutboxWriter().add(session, poison)
@@ -43,6 +45,7 @@ async def test_unknown_schema_is_quarantined_without_queue_delivery(
     ).publish_batch()
 
     assert result.quarantined == 1
+    # 队列必须零投递：隔离发生在 publisher 边界，毒事件不出本地消息表。
     assert queue.tasks == []
     async with sessions() as session:
         row = await session.scalar(

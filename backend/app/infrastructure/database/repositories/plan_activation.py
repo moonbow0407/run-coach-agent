@@ -33,6 +33,8 @@ from app.infrastructure.outbox.writer import OutboxWriter
 
 
 class SqlAlchemyPlanActivationStore:
+    """计划激活仓储：确认提案 = 生成新版本计划并替换课次的事务实现。"""
+
     def __init__(
         self,
         sessions: async_sessionmaker[AsyncSession],
@@ -64,6 +66,7 @@ class SqlAlchemyPlanActivationStore:
                     raise NotFoundError("计划调整不存在")
                 plan_change = plan_change_from_row(change_row)
                 if plan_change.status is PlanChangeStatus.CONFIRMED:
+                    # 幂等：重复确认直接返回既有结果，不再生成新计划
                     resulting = await _load_plan_with_sessions(
                         session, user_id=user_id, plan_id=plan_change.resulting_plan_id
                     )
@@ -90,6 +93,7 @@ class SqlAlchemyPlanActivationStore:
                     .limit(1)
                 )
                 if active_row is None or latest_state_row is None:
+                    # 前置事实（active 计划/状态快照）已消失：提案作废为 STALE
                     change_row.status = PlanChangeStatus.STALE.value
                     change_row.resolved_at = now
                     await session.commit()
@@ -104,6 +108,7 @@ class SqlAlchemyPlanActivationStore:
                     and latest_state.version == plan_change.based_on_state_version
                 )
                 if not fresh:
+                    # 当前 active 计划/快照与提案依据的版本不一致：提案已过时
                     change_row.status = PlanChangeStatus.STALE.value
                     change_row.resolved_at = now
                     await session.commit()
@@ -149,6 +154,7 @@ class SqlAlchemyPlanActivationStore:
                 for old in session_rows:
                     replacement = replacements.get(old.id)
                     if replacement is None:
+                        # 未被替换的课次：原样复制进新计划版本
                         new_session_rows.append(
                             PlannedSessionRow(
                                 id=new_id(),
@@ -160,6 +166,7 @@ class SqlAlchemyPlanActivationStore:
                             )
                         )
                     else:
+                        # 被替换的课次：降载为休息课并采用提案中的新标题
                         new_session_rows.append(
                             PlannedSessionRow(
                                 id=new_id(),
@@ -198,9 +205,9 @@ class SqlAlchemyPlanActivationStore:
                     already_confirmed=False,
                 )
             except ConflictError:
-                raise
+                raise  # STALE 已先提交落库，这里只把冲突继续抛给上层
             except Exception:
-                await session.rollback()
+                await session.rollback()  # 其他异常整体回滚，不留半成品
                 raise
 
 
@@ -210,6 +217,7 @@ async def _load_plan_with_sessions(
     user_id: UUID,
     plan_id: UUID | None,
 ) -> tuple | None:
+    """加载指定计划及其课次；计划不存在或未指定时返回 None。"""
     if plan_id is None:
         return None
     plan_row = await session.scalar(

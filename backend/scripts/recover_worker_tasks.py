@@ -17,6 +17,7 @@ from app.workers.recovery import OutboxRecoveryScanner
 
 
 async def main() -> None:
+    """连接数据库与 Redis，执行一次恢复扫描，并以 JSON 打印统计结果。"""
     settings = Settings()
     engine = create_engine(settings.database_url)
     redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
@@ -29,6 +30,7 @@ async def main() -> None:
         ).scan()
         print(json.dumps(asdict(result), ensure_ascii=False))
     finally:
+        # 无论成败都释放 Redis 连接与数据库引擎。
         await redis.aclose()
         await engine.dispose()
 

@@ -31,6 +31,7 @@ class WorkoutQueryService:
         )
 
     async def get_workout(self, *, user_id: UUID, workout_id: UUID) -> Workout | None:
+        """按 id 读取单条训练；不存在或不属于该用户返回 None。"""
         return await self._repository.get(user_id=user_id, workout_id=workout_id)
 
     async def get_feedback(
@@ -39,4 +40,5 @@ class WorkoutQueryService:
         user_id: UUID,
         workout_id: UUID,
     ) -> WorkoutFeedback | None:
+        """读取某次训练的用户反馈；尚未报告返回 None。"""
         return await self._repository.get_feedback(user_id=user_id, workout_id=workout_id)

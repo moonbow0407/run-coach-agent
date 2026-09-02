@@ -1,3 +1,5 @@
+"""记忆链路端到端：Turn 提交→语义记忆投影→新轮次检索；失败拦截、用户隔离、episode 补全与双时态纠正。"""
+
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -31,6 +33,8 @@ from tests.durable import drain_durable_tasks
 
 
 class ExplicitConstraintExtractor:
+    """桩抽取器：仅当用户消息含"周三晚上"时产出一条显式可用性约束候选。"""
+
     async def extract(
         self,
         *,
@@ -55,6 +59,8 @@ class ExplicitConstraintExtractor:
 
 
 class FixedEmbeddingProvider:
+    """嵌入桩：所有文本都映射到同一个 1536 维固定向量，使相似检索结果确定可断言。"""
+
     async def embed(self, texts: tuple[str, ...]) -> EmbeddingBatch:
         vector = (1.0,) + (0.0,) * 1535
         return EmbeddingBatch(
@@ -66,6 +72,8 @@ class FixedEmbeddingProvider:
 
 
 class PreferenceExtractor:
+    """桩抽取器：从消息中识别"晚上/早上"训练偏好，产出日程偏好候选。"""
+
     async def extract(
         self,
         *,
@@ -98,6 +106,7 @@ async def test_committed_turn_projects_and_new_thread_retrieves_memory(
     test_settings,
     clock,
 ) -> None:
+    """验证：Turn 提交后语义记忆投影落库，下一轮对话能检索到；同一 Turn 重复投影按 receipt 幂等。"""
     reasoner = ScriptedReasoner(
         [
             FinalAction(content="记住了，之后会避开这个时段。"),
@@ -117,6 +126,7 @@ async def test_committed_turn_projects_and_new_thread_retrieves_memory(
             headers=headers,
         )
         await drain_durable_tasks(app)
+        # drain_durable_tasks：同步驱动 outbox→消费链路；再手动重投影一次验证幂等。
         replay = await app.state.semantic_memory_projection_service.project_committed_turn(
             user_id=user_id,
             turn_id=UUID(first.json()["turn_id"]),
@@ -130,6 +140,7 @@ async def test_committed_turn_projects_and_new_thread_retrieves_memory(
         await drain_durable_tasks(app)
 
     assert first.status_code == 200
+    # replayed=True：第二次投影识别出 receipt 已存在，未重复入库。
     assert replay.replayed
     assert second.status_code == 200
     bundle = reasoner.seen_contexts[1].context_bundle
@@ -157,6 +168,7 @@ async def test_failed_turn_cannot_create_projection_receipt(
     test_settings,
     clock,
 ) -> None:
+    """验证：失败 Turn 不产生任何投影 receipt——失败的对话不能留下记忆痕迹。"""
     app = make_app(
         reasoner=FailingReasoner(),
         memory_extractor=ExplicitConstraintExtractor(),
@@ -183,6 +195,7 @@ async def test_same_vectors_remain_cross_user_isolated(
     test_settings,
     clock,
 ) -> None:
+    """验证：两个用户的记忆向量完全相同（固定向量桩），检索仍按用户隔离、互不串扰。"""
     other_user_id = uuid4()
     async with short_session(sessions, commit=True) as session:
         session.add(UserRow(id=other_user_id, created_at=clock.now(), updated_at=clock.now()))
@@ -224,6 +237,7 @@ async def test_fatigue_episode_building_completes_in_place_and_old_window_is_obs
     user_id,
     clock,
 ) -> None:
+    """验证：疲劳窗口先建 building，补齐结局证据后原地 completed；缺失结局的过期窗口重投影标记 obsolete。"""
     trigger_id = uuid4()
     outcome_id = uuid4()
     trigger_at = clock.now() - timedelta(days=7)
@@ -284,6 +298,7 @@ def _snapshot(
     fatigue: str,
     recovery: str,
 ) -> AthleteStateSnapshotRow:
+    """构造状态快照行：fatigue/recovery 由参数给定，其余指标取固定可信值。"""
     return AthleteStateSnapshotRow(
         id=snapshot_id,
         user_id=user_id,
@@ -308,10 +323,12 @@ async def test_explicit_correction_supersedes_but_historical_as_of_keeps_old_kno
     test_settings,
     clock,
 ) -> None:
+    """验证：显式纠正使旧偏好 superseded、新偏好 active；按历史 as_of 检索仍得旧知识（双时态语义）。"""
     first_at = clock.now()
     correction_at = first_at + timedelta(days=1)
     query_at = correction_at + timedelta(days=1)
     apps = []
+    # 三个时钟冻结在不同日期的 app：首报偏好→纠正偏好→检索验证。
     try:
         first_reasoner = ScriptedReasoner([FinalAction(content="收到。")])
         first_app = create_app(
@@ -353,6 +370,7 @@ async def test_explicit_correction_supersedes_but_historical_as_of_keeps_old_kno
                 headers=headers,
             )
             await drain_durable_tasks(correction_app)
+        # 纠正轮的上下文里应仍能检索到旧偏好（纠正前它是 active 知识）。
         correction_bundle = correction_reasoner.seen_contexts[0].context_bundle
         assert correction_bundle.current_input == "不是，我现在更喜欢早上训练。"
         assert [item.content for item in correction_bundle.semantic_memories] == [
@@ -369,6 +387,7 @@ async def test_explicit_correction_supersedes_but_historical_as_of_keeps_old_kno
             query="训练时间偏好",
             as_of=first_at + timedelta(hours=12),
         )
+        # 同一检索查询两个 as_of：现在得到新偏好，历史时点得到旧偏好。
         assert [item.content for item in current.semantic] == ["用户长期更喜欢早上训练"]
         assert [item.content for item in historical.semantic] == ["用户长期更喜欢晚上训练"]
         async with short_session(sessions) as session:
@@ -382,5 +401,6 @@ async def test_explicit_correction_supersedes_but_historical_as_of_keeps_old_kno
         assert [row.status for row in rows] == ["superseded", "active"]
         assert rows[0].superseded_by_id == rows[1].id
     finally:
+        # teardown：释放本用例创建的所有引擎连接池。
         for app in apps:
             await app.state.engine.dispose()

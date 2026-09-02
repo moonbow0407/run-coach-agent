@@ -21,6 +21,8 @@ from app.common.ids import new_id
 
 
 class PlanAdaptationService:
+    """计划调整应用服务：生成 DRAFT 提案、生命周期流转、确认激活与拒绝。"""
+
     def __init__(
         self,
         *,
@@ -49,14 +51,17 @@ class PlanAdaptationService:
         reason: str,
     ) -> tuple[PlanChange, bool]:
         """创建 DRAFT PlanChange。返回 (提案, 窗口内是否有未改动的 Race)。"""
+        # 调整理由必填：它是给用户看的解释，不允许空白。
         if not reason.strip():
             raise DomainError("reason_required")
+        # 同一用户同时只允许一个未解决提案，避免多个草案互相覆盖。
         unresolved = await self._changes.get_unresolved(user_id=user_id)
         if unresolved is not None:
             raise ConflictError("unresolved_plan_change_exists")
         plan = await self._plans.get_active(user_id=user_id)
         if plan is None:
             raise DomainError("no_active_plan")
+        # 乐观版本核对：调用方必须基于它读到的计划 / 状态版本发起提案。
         if plan.version != based_on_plan_version:
             raise DomainError("based_on_plan_version_mismatch")
         state = await self._snapshots.get_latest(user_id=user_id)
@@ -64,6 +69,7 @@ class PlanAdaptationService:
             raise DomainError("no_athlete_state")
         if state.version != based_on_state_version:
             raise DomainError("based_on_state_version_mismatch")
+        # 课次 diff 由纯领域函数生成，模型不直接提供 diff。
         sessions = await self._plans.list_sessions(user_id=user_id, plan_id=plan.id)
         generated = generate_reduce_upcoming_load(
             as_of=as_of,
@@ -72,6 +78,7 @@ class PlanAdaptationService:
             fatigue_level=state.fatigue_level,
             recovery_level=state.recovery_level,
         )
+        # 先在内存中组装 DRAFT 提案再落库；激活要等用户确认。
         change = PlanChange(
             id=new_id(),
             user_id=user_id,
@@ -114,6 +121,7 @@ class PlanAdaptationService:
         return change
 
     async def promote_draft_for_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
+        """Turn 已提交（COMMITTED）：把该轮产生的 DRAFT 推进到待确认。"""
         for change in await self._changes.list_by_turn(user_id=user_id, turn_id=turn_id):
             if change.status is PlanChangeStatus.DRAFT:
                 await self._changes.transition(
@@ -124,6 +132,7 @@ class PlanAdaptationService:
                 )
 
     async def abandon_draft_for_turn(self, *, user_id: UUID, turn_id: UUID) -> None:
+        """Turn 被拒绝或中止：该轮产生的 DRAFT 直接作废。"""
         now = self._clock.now()
         for change in await self._changes.list_by_turn(user_id=user_id, turn_id=turn_id):
             if change.status is PlanChangeStatus.DRAFT:
@@ -142,6 +151,7 @@ class PlanAdaptationService:
         plan_change_id: UUID,
         event_metadata: EventMetadata | None = None,
     ) -> PlanActivationResult:
+        """用户确认提案：由激活存储在行锁事务内完成校验与版本激活。"""
         change = await self._changes.get(user_id=user_id, plan_change_id=plan_change_id)
         if change is None:
             raise NotFoundError("计划调整不存在")
@@ -153,6 +163,7 @@ class PlanAdaptationService:
                 event_metadata=event_metadata or EventMetadata(correlation_id=new_id()),
             )
         except ConflictError as exc:
+            # 存储层判定版本过期（stale）：重读提案并归一化为 StalePlanChangeError。
             if exc.code == "stale":
                 stale = await self._changes.get(user_id=user_id, plan_change_id=plan_change_id)
                 if stale is None:
@@ -161,9 +172,11 @@ class PlanAdaptationService:
             raise
 
     async def reject(self, *, user_id: UUID, plan_change_id: UUID) -> PlanChange:
+        """用户拒绝提案：PENDING → REJECTED；已是 REJECTED 则幂等返回。"""
         change = await self._changes.get(user_id=user_id, plan_change_id=plan_change_id)
         if change is None:
             raise NotFoundError("计划调整不存在")
+        # 幂等：重复拒绝直接返回现有结果，不报错。
         if change.status is PlanChangeStatus.REJECTED:
             return change
         try:

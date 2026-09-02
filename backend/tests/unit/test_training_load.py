@@ -13,17 +13,20 @@ AS_OF = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 
 
 def test_session_rpe_is_duration_minutes_times_rpe() -> None:
+    """验证：单次训练负荷 = 时长（分钟）× sRPE。"""
     assert session_rpe_load(duration_s=2520, perceived_exertion=8) == (2520 / 60.0) * 8
     assert session_rpe_load(duration_s=3600, perceived_exertion=5) == 60.0 * 5
 
 
 def test_missing_rpe_or_duration_is_not_imputed() -> None:
+    """验证：缺 sRPE 或时长时不插补估算，直接返回 None。"""
     assert session_rpe_load(duration_s=3600, perceived_exertion=None) is None
     assert session_rpe_load(duration_s=None, perceived_exertion=8) is None
     assert session_rpe_load(duration_s=None, perceived_exertion=None) is None
 
 
 def test_workout_type_is_not_a_load_factor() -> None:
+    """验证：课型不参与负荷计算，只影响质量课（quality session）计数。"""
     easy = make_workout(started_at=AS_OF - timedelta(days=1), workout_type=WorkoutType.EASY)
     interval = make_workout(
         started_at=AS_OF - timedelta(days=1),
@@ -49,6 +52,7 @@ def test_workout_type_is_not_a_load_factor() -> None:
 
 
 def test_future_workouts_are_excluded() -> None:
+    """验证：as_of 之后的课不计入当前窗统计。"""
     past = make_workout(started_at=AS_OF - timedelta(days=1), duration_s=1800)
     future = make_workout(started_at=AS_OF + timedelta(hours=2), duration_s=3600)
     analysis = analyze_training_load(
@@ -61,6 +65,7 @@ def test_future_workouts_are_excluded() -> None:
 
 
 def test_coverage_partial_and_complete() -> None:
+    """验证：sRPE 部分覆盖时只给 partial 负荷，全覆盖时才给总和。"""
     w1 = make_workout(started_at=AS_OF - timedelta(days=1), duration_s=1800)
     w2 = make_workout(started_at=AS_OF - timedelta(days=2), duration_s=1800)
     feedback = make_feedback(workout_id=w1.id, perceived_exertion=5)
@@ -73,6 +78,7 @@ def test_coverage_partial_and_complete() -> None:
     assert partial.current.srpe_available_count == 1
     assert partial.current.srpe_coverage == 0.5
     assert partial.current.is_partial is True
+    # 部分覆盖下总和不可信，只给已知课次的 partial 负荷
     assert partial.current.srpe_load_sum is None
     assert partial.current.partial_srpe_load == session_rpe_load(
         duration_s=1800, perceived_exertion=5
@@ -93,6 +99,7 @@ def test_coverage_partial_and_complete() -> None:
 
 
 def test_coverage_none_when_no_eligible_workouts() -> None:
+    """验证：无课次可计算时覆盖率为 None 而非 0（区分「没数据」与「没覆盖」）。"""
     rest = make_workout(
         started_at=AS_OF - timedelta(days=1),
         duration_s=None,
@@ -105,6 +112,7 @@ def test_coverage_none_when_no_eligible_workouts() -> None:
 
 
 def test_windows_are_current_7d_and_previous_7d() -> None:
+    """验证：窗口划分为当前 7 天与前一个 7 天，第 7 天边界日归当前窗。"""
     current_w = make_workout(started_at=AS_OF - timedelta(days=2))
     previous_w = make_workout(started_at=AS_OF - timedelta(days=10))
     older = make_workout(started_at=AS_OF - timedelta(days=20))
@@ -120,6 +128,7 @@ def test_windows_are_current_7d_and_previous_7d() -> None:
 
 
 def test_load_change_ratio_reasons() -> None:
+    """验证：负荷变化比仅在前后窗覆盖都足够时给出，缺失时返回明确原因码。"""
     w_now = make_workout(started_at=AS_OF - timedelta(days=1), duration_s=1800)
     analysis = analyze_training_load(
         as_of=AS_OF,
@@ -155,6 +164,8 @@ async def test_analysis_service_does_not_call_get_feedback_per_workout() -> None
     from app.coaching.application.training_analysis_service import TrainingAnalysisService
 
     class FakeWorkouts:
+        """训练记录仓储替身：统计逐条与批量 Feedback 查询的调用次数。"""
+
         def __init__(self) -> None:
             self.get_feedback_calls = 0
             self.batch_calls = 0
@@ -180,6 +191,8 @@ async def test_analysis_service_does_not_call_get_feedback_per_workout() -> None
             return []
 
     class FakePlans:
+        """计划仓储替身：恒返回无活跃计划。"""
+
         async def get_active(self, *, user_id):
             return None
 
@@ -192,6 +205,7 @@ async def test_analysis_service_does_not_call_get_feedback_per_workout() -> None
     fake = FakeWorkouts()
     service = TrainingAnalysisService(fake, FakePlans())
     await service.analyze_training_load(user_id=fake.workouts[0].user_id, as_of=AS_OF)
+    # 逐条查询必须为 0 次：一旦出现即 N+1 回归
     assert fake.get_feedback_calls == 0
     assert fake.batch_calls == 1
 
@@ -203,6 +217,8 @@ async def test_analysis_service_takes_latest_feedback_per_workout() -> None:
     workout = make_workout(started_at=AS_OF - timedelta(days=1), duration_s=1800)
 
     class FakeWorkouts:
+        """训练记录仓储替身：回放同一 workout 的两条不同时间反馈。"""
+
         def __init__(self) -> None:
             self.seen_end = None
 
@@ -226,6 +242,8 @@ async def test_analysis_service_takes_latest_feedback_per_workout() -> None:
             return []
 
     class FakePlans:
+        """计划仓储替身：恒返回无活跃计划。"""
+
         async def get_active(self, *, user_id):
             return None
 

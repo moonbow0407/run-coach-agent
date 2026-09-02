@@ -17,8 +17,8 @@ class ScriptedReasoner:
 
     def __init__(self, actions: Sequence[AgentAction]) -> None:
         self._actions = list(actions)
-        self._index = 0
-        self.seen_contexts: list[ReasoningContext] = []
+        self._index = 0  # 下一次 reason 应返回的 Action 下标
+        self.seen_contexts: list[ReasoningContext] = []  # 测试断言用：记录每次收到的上下文
 
     async def reason(self, context: ReasoningContext) -> AgentAction:
         # 快照 interactions 与可见 Tool：Runtime 会原地追加，
@@ -31,6 +31,7 @@ class ScriptedReasoner:
             )
         )
         if self._index >= len(self._actions):
+            # 预定序列用尽说明 Runtime 循环次数与测试预期不符，直接失败
             raise ReasonerError("ScriptedReasoner 已用尽预定 Action")
         action = self._actions[self._index]
         self._index += 1
@@ -38,7 +39,10 @@ class ScriptedReasoner:
 
 
 class FailingReasoner:
+    """恒定抛错的 Reasoner 替身，用于验证失败传播语义。"""
+
     def __init__(self, error: Exception | None = None) -> None:
+        # 可注入自定义异常；默认抛 ReasonerError
         self._error = error or ReasonerError("预定失败")
 
     async def reason(self, context: ReasoningContext) -> AgentAction:

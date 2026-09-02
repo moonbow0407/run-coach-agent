@@ -24,6 +24,8 @@ from app.memory.ports.evidence_reader import ValidatedEvidence
 
 
 class SqlAlchemyEvidenceReader:
+    """证据读取器：把各类业务记录校验并转成正式证据引用（EvidenceRef）。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
@@ -33,6 +35,7 @@ class SqlAlchemyEvidenceReader:
         user_id: UUID,
         source_ids: tuple[tuple[EvidenceSourceType, UUID], ...],
     ) -> tuple[ValidatedEvidence, ...]:
+        """按显式来源列表逐个读取并校验证据。"""
         async with short_session(self._sessions) as session:
             result = [
                 await self._read_one(
@@ -53,12 +56,13 @@ class SqlAlchemyEvidenceReader:
         ended_at: datetime,
         source_types: tuple[EvidenceSourceType, ...],
     ) -> tuple[ValidatedEvidence, ...]:
+        """扫描时间窗口内请求的各类来源，汇总为按发生时间排序的证据。"""
         if started_at.tzinfo is None or ended_at.tzinfo is None or ended_at < started_at:
-            raise ValueError("invalid_evidence_window")
+            raise ValueError("invalid_evidence_window")  # 时间窗口非法
         requested = set(source_types)
         identities: list[tuple[EvidenceSourceType, UUID]] = []
         async with short_session(self._sessions) as session:
-            if EvidenceSourceType.WORKOUT in requested:
+            if EvidenceSourceType.WORKOUT in requested:  # 收集窗口内的训练
                 ids = await session.scalars(
                     select(WorkoutRow.id).where(
                         WorkoutRow.user_id == user_id,
@@ -88,6 +92,7 @@ class SqlAlchemyEvidenceReader:
                     (EvidenceSourceType.ATHLETE_STATE_SNAPSHOT, item) for item in ids
                 )
             if EvidenceSourceType.PLAN_CHANGE in requested:
+                # 计划调整只认已确认（confirmed）的，且按确认时间落窗
                 ids = await session.scalars(
                     select(PlanChangeRow.id).where(
                         PlanChangeRow.user_id == user_id,
@@ -125,8 +130,9 @@ class SqlAlchemyEvidenceReader:
         source_type: EvidenceSourceType,
         source_id: UUID,
     ) -> ValidatedEvidence:
+        """读取单个来源并校验归属/状态，返回带独立性角色与负载的证据。"""
         if source_type is EvidenceSourceType.MESSAGE:
-            row = await session.scalar(
+            row = await session.scalar(  # 消息须属于本用户已提交的 Turn
                 select(MessageRow)
                 .join(TurnRow, TurnRow.id == MessageRow.turn_id)
                 .where(
@@ -142,13 +148,14 @@ class SqlAlchemyEvidenceReader:
                     row.created_at,
                     row.created_at.isoformat(),
                     f"conversation:turn:{row.turn_id}",
+                    # 用户消息是独立证据；助手消息由系统生成，只算派生上下文
                     EvidenceIndependenceRole.PRIMARY
                     if row.role == "user"
                     else EvidenceIndependenceRole.DERIVED_CONTEXT,
                     {},
                 )
         elif source_type is EvidenceSourceType.TURN:
-            row = await session.scalar(
+            row = await session.scalar(  # 整轮对话属于系统产物，只算派生上下文
                 select(TurnRow).where(
                     TurnRow.id == source_id,
                     TurnRow.user_id == user_id,
@@ -205,7 +212,7 @@ class SqlAlchemyEvidenceReader:
                     },
                 )
         elif source_type is EvidenceSourceType.ATHLETE_STATE_SNAPSHOT:
-            row = await session.scalar(
+            row = await session.scalar(  # 状态快照是系统推导结果，属派生上下文
                 select(AthleteStateSnapshotRow).where(
                     AthleteStateSnapshotRow.id == source_id,
                     AthleteStateSnapshotRow.user_id == user_id,
@@ -249,7 +256,7 @@ class SqlAlchemyEvidenceReader:
                     },
                 )
         elif source_type is EvidenceSourceType.EPISODE:
-            row = await session.scalar(
+            row = await session.scalar(  # 情节须已完成才能作为证据
                 select(EpisodeRow).where(
                     EpisodeRow.id == source_id,
                     EpisodeRow.user_id == user_id,
@@ -266,4 +273,5 @@ class SqlAlchemyEvidenceReader:
                     EvidenceIndependenceRole.PRIMARY,
                     {"type": row.type, "summary": row.summary},
                 )
+        # 任一来源不存在、不归属本用户或状态不满足要求，都按未找到处理
         raise NotFoundError("memory_evidence_source_not_found")

@@ -14,29 +14,33 @@ from app.memory.ports.repositories import (
     RankedSemanticCandidate,
 )
 
-SEMANTIC_LIMIT = 8
-EPISODE_LIMIT = 4
-SEMANTIC_CHAR_BUDGET = 1600
-EPISODE_CHAR_BUDGET = 2000
-CANDIDATE_SEMANTIC_LIMIT = 24
-CANDIDATE_EPISODE_LIMIT = 12
-EMBEDDING_DIMENSIONS = 1536
-POLICY_VERSION = "phase4.v1"
+SEMANTIC_LIMIT = 8  # 单次检索最多注入的语义记忆条数
+EPISODE_LIMIT = 4  # 单次检索最多注入的情景记忆条数
+SEMANTIC_CHAR_BUDGET = 1600  # 语义记忆注入 Context 的字符预算
+EPISODE_CHAR_BUDGET = 2000  # 情景记忆注入 Context 的字符预算
+CANDIDATE_SEMANTIC_LIMIT = 24  # 向量检索召回的语义候选上限（重排前）
+CANDIDATE_EPISODE_LIMIT = 12  # 向量检索召回的情景候选上限（重排前）
+EMBEDDING_DIMENSIONS = 1536  # 向量维度契约：嵌入结果必须严格一致
+POLICY_VERSION = "phase4.v1"  # 重排与预算策略版本：结果可追溯
 
 
 @dataclass(frozen=True)
 class MemoryRetrievalResult:
-    semantic: tuple[SemanticMemory, ...]
-    episodic: tuple[Episode, ...]
-    semantic_truncated: bool
-    episodic_truncated: bool
-    policy_version: str = POLICY_VERSION
+    """一次检索的最终结果：入选记忆 + 是否因条数/预算被截断。"""
+
+    semantic: tuple[SemanticMemory, ...]  # 入选的语义记忆条目
+    episodic: tuple[Episode, ...]  # 入选的情景记忆条目
+    semantic_truncated: bool  # 语义记忆是否被截断（未全部注入）
+    episodic_truncated: bool  # 情景记忆是否被截断（未全部注入）
+    policy_version: str = POLICY_VERSION  # 产生本结果的重排策略版本
 
 
 class MemoryRetrievalService:
+    """记忆检索服务：向量召回 → 确定性重排 → 条数与字符预算裁剪。"""
+
     def __init__(self, *, repository: MemoryRepository, embedding: EmbeddingProvider) -> None:
-        self._repository = repository
-        self._embedding = embedding
+        self._repository = repository  # Memory 仓储端口：向量检索与双时间过滤
+        self._embedding = embedding  # 向量化端口：查询文本转向量
 
     async def retrieve(
         self,
@@ -47,11 +51,15 @@ class MemoryRetrievalService:
         semantic_limit: int = SEMANTIC_LIMIT,
         episode_limit: int = EPISODE_LIMIT,
     ) -> MemoryRetrievalResult:
+        """检索与当前输入相关的长期记忆，供 Agent 每轮构造 Context。"""
+        # 调用方请求的条数不允许突破模块默认上限。
         semantic_limit = min(max(0, semantic_limit), SEMANTIC_LIMIT)
         episode_limit = min(max(0, episode_limit), EPISODE_LIMIT)
         try:
+            # 用户已无可检索记忆时短路返回，省去向量化与数据库查询。
             if not await self._repository.has_retrievable(user_id=user_id, as_of=as_of):
                 return MemoryRetrievalResult((), (), False, False)
+            # 向量化查询文本并校验供应商维度契约。
             batch = await self._embedding.embed((query,))
             if (
                 batch.dimensions != EMBEDDING_DIMENSIONS
@@ -75,8 +83,10 @@ class MemoryRetrievalService:
         except MemoryRetrievalInfrastructureError:
             raise
         except Exception as exc:
+            # 检索失败必须显式暴露，不得静默当作"没有记忆"处理。
             raise MemoryRetrievalInfrastructureError("memory_retrieval_failed") from exc
 
+        # 确定性重排：主键=加权得分（降序），平分时按时间新→旧、ID 兜底。
         ranked_semantic = sorted(
             semantic,
             key=lambda item: (
@@ -93,6 +103,7 @@ class MemoryRetrievalService:
                 str(item.episode.id),
             ),
         )
+        # 按条数与字符预算裁剪，并记录是否发生截断。
         selected_semantic, semantic_truncated = _bounded(
             tuple(item.memory for item in ranked_semantic),
             limit=semantic_limit,
@@ -114,6 +125,7 @@ class MemoryRetrievalService:
 
 
 def _semantic_score(item: RankedSemanticCandidate, as_of: datetime) -> float:
+    """语义记忆得分：相似度 0.6 为主，置信度/新近度/明示偏好各加权。"""
     explicit_boost = 1.0 if item.memory.origin is MemoryOrigin.EXPLICIT else 0.0
     return (
         0.60 * item.cosine_similarity
@@ -124,6 +136,7 @@ def _semantic_score(item: RankedSemanticCandidate, as_of: datetime) -> float:
 
 
 def _episode_score(item: RankedEpisodeCandidate, as_of: datetime) -> float:
+    """情景记忆得分：相似度 0.65 为主，重要度与新近度加权。"""
     return (
         0.65 * item.cosine_similarity
         + 0.20 * item.episode.importance
@@ -132,6 +145,7 @@ def _episode_score(item: RankedEpisodeCandidate, as_of: datetime) -> float:
 
 
 def _recency(moment: datetime, as_of: datetime) -> float:
+    """时间新近度打分：越新越接近 1，约每 180 天衰减一半。"""
     days = max(0.0, (as_of - moment).total_seconds() / 86400)
     return 1.0 / (1.0 + days / 180.0)
 
@@ -143,10 +157,15 @@ def _bounded[T](
     budget: int,
     text,
 ) -> tuple[tuple[T, ...], bool]:
+    """按条数上限与字符预算顺序选取，返回（入选集合, 是否被截断）。
+
+    [T] 是 PEP 695 泛型：同一实现同时服务语义与情景两种条目。
+    """
     selected: list[T] = []
     used = 0
     for item in items:
         content = text(item)
+        # 已达条数上限，或再放一条就超字符预算：停止并标记截断。
         if len(selected) >= limit or used + len(content) > budget:
             return tuple(selected), True
         selected.append(item)

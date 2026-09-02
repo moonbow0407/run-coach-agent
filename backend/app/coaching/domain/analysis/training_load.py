@@ -93,6 +93,7 @@ def _window_metrics(
     eligible = 0
     available = 0
     load_sum = 0.0
+    # eligible = 有时长、具备负荷计算资格的课次；available = 时长与 RPE 齐备、真正算出负荷的课次。
     for workout in workouts:
         if workout.duration_s is not None:
             total_duration += workout.duration_s
@@ -103,15 +104,18 @@ def _window_metrics(
             quality_count += 1
         feedback = feedback_by_workout_id.get(workout.id)
         rpe = feedback.perceived_exertion if feedback is not None else None
+        # 该课次的负荷 = 时长 × 主观 RPE；缺任一即视为该课无负荷数据。
         load = session_rpe_load(duration_s=workout.duration_s, perceived_exertion=rpe)
         if load is not None:
             available += 1
             load_sum += load
 
+    # 覆盖率 = 真正算出负荷 / 具备资格；窗口内没有资格课次时覆盖率无意义。
     coverage = (available / eligible) if eligible > 0 else None
     is_partial = coverage is not None and coverage < 1.0
     complete_sum: float | None
     partial_sum: float | None
+    # 完整覆盖才输出完整负荷合计；部分覆盖只输出部分合计，避免被误当完整负荷。
     if coverage is None or available == 0:
         complete_sum = None
         partial_sum = None
@@ -141,12 +145,15 @@ def _load_change_ratio(
     current: TrainingLoadWindow,
     previous: TrainingLoadWindow,
 ) -> tuple[float | None, str | None]:
+    """当前窗与前窗的可用负荷之比；任一窗口覆盖不足则拒绝给出比值。"""
     current_load = current.usable_srpe_load()
     previous_load = previous.usable_srpe_load()
+    # 两个窗口都必须有足够 sRPE 覆盖，比值才有业务意义。
     if current.srpe_coverage is None or current.srpe_coverage < 0.5:
         return None, "insufficient_current_coverage"
     if previous.srpe_coverage is None or previous.srpe_coverage < 0.5:
         return None, "insufficient_previous_coverage"
+    # 前窗没有可用基线（无数据或为 0）时，除法无意义。
     if previous_load is None or previous_load <= 0:
         return None, "no_previous_baseline"
     if current_load is None:

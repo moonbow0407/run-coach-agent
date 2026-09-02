@@ -13,6 +13,7 @@ _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
 
 
 def _is_cjk(text: str) -> bool:
+    """判断文本是否全部为中文字符（决定是否用子串匹配口径）。"""
     return all("\u4e00" <= ch <= "\u9fff" for ch in text)
 
 

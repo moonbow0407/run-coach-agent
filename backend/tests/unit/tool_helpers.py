@@ -7,9 +7,10 @@ from app.tools.registry.definition import ToolDefinition, ToolRisk, ToolSource
 
 
 class SampleArgs(BaseModel):
+    # extra="forbid"：禁止未声明字段，模拟严格的参数校验
     model_config = ConfigDict(extra="forbid")
 
-    value: int
+    value: int  # 工具入参：仅一个整数，供校验与回显
 
 
 class SampleTool:
@@ -38,4 +39,5 @@ class SampleTool:
         return SampleArgs
 
     async def execute(self, *, args: SampleArgs, context: ToolExecutionContext) -> object:
+        """假执行：回显工具名与入参，不触达任何外部系统。"""
         return {"name": self._name, "value": args.value}

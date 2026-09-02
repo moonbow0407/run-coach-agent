@@ -42,14 +42,17 @@ logger = logging.getLogger(__name__)
 
 
 def _chat_service(request: Request) -> ChatService:
+    """取出启动时装配在 app.state 上的对话编排服务（一次交互的事务边界）。"""
     return request.app.state.chat_service
 
 
 def _reader(request: Request) -> ConversationReader:
+    """取出会话只读端口；路由只用它查历史，不接触 ORM。"""
     return request.app.state.conversation_reader
 
 
 def _dispatcher(request: Request) -> LifecycleDispatcher:
+    """取出进程内生命周期事件总线，供 SSE 流订阅 / 退订。"""
     return request.app.state.lifecycle
 
 
@@ -59,7 +62,11 @@ async def chat(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> ChatResponse:
-    """同步聊天接口：等待 Agent 完整执行后一次性返回最终回答。"""
+    """同步聊天接口：等待 Agent 完整执行后一次性返回最终回答。
+
+    request_context 由 Depends 注入：user_id 只来自 JWT，请求体无法指定身份。
+    RunCoachError 统一翻译成 HTTP 状态码，避免把内部异常抛给调用方。
+    """
     try:
         result = await _chat_service(request).send_message(
             request_context=request_context,
@@ -86,7 +93,9 @@ async def chat_stream(
 
     实现方式：ChatService 的执行放在后台任务里跑，同时把本请求的生命周期
     事件（推理开始 / 能力调用 / 提交 / 失败等）从进程内事件总线转发到 SSE 流。
-    事件的“生产方”（后台任务）与“消费方”（本生成器）通过 asyncio.Queue 解耦。
+    事件的生产方是后台任务、消费方是本生成器，两者节奏不同：listener 是同步回调，
+    由 ChatService 在执行链里调用；SSE 帧只能在异步生成器里 yield。用 asyncio.Queue
+    把“随时可能到达的事件”缓冲起来，才能既不被阻塞又能保证事件按序完整推送。
     """
     queue: asyncio.Queue[LifecycleEvent] = asyncio.Queue()
 
@@ -191,6 +200,7 @@ async def chat_stream(
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    # media_type=text/event-stream 即 SSE（Server-Sent Events，服务器单向推送）响应。
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 

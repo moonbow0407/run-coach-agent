@@ -1,3 +1,5 @@
+"""聊天 HTTP 边界：对话消息入库、会话线程归属隔离、SSE 流式生命周期与失败兜底。"""
+
 import asyncio
 from uuid import uuid4
 
@@ -17,6 +19,7 @@ from tests.conftest import token_for
 
 @pytest.mark.asyncio
 async def test_health(make_app) -> None:
+    """验证：健康检查端点返回 200 与固定状态体。"""
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="x")]))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/health")
@@ -29,6 +32,7 @@ async def test_chat_and_list_committed_messages(
     make_app,
     auth_header,
 ) -> None:
+    """验证：发送消息完成一轮对话后，用户与助手消息按序提交，可按会话线程回查。"""
     reasoner = ScriptedReasoner([FinalAction(content="收到，我们从目标开始。")])
     app = make_app(reasoner=reasoner)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -64,6 +68,7 @@ async def test_other_user_cannot_read_thread(
     test_settings: Settings,
     clock: FrozenClock,
 ) -> None:
+    """验证：其他用户读取他人会话线程返回 404（不暴露存在性），不存在的线程同样 404。"""
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="ok")]))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         created = await client.post(
@@ -94,7 +99,9 @@ async def test_chat_sse_emits_lifecycle_events(
     make_app,
     auth_header,
 ) -> None:
+    """验证：SSE 流式接口按序输出 run.started→reasoning→response.delta→run.completed 事件及最终回复。"""
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="流式完成")]))
+    # client.stream + aread：读取 SSE（Server-Sent Events）完整字节流后断言事件文本。
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
         client.stream(
@@ -119,12 +126,15 @@ async def test_chat_sse_finishes_when_task_fails_without_terminal_event(
     auth_header,
     monkeypatch,
 ) -> None:
+    """验证：任务在发布终态事件前就抛错时，SSE 仍能收尾并输出 run.failed，连接不挂死。"""
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="unused")]))
 
     async def fail_without_event(**_kwargs):
         raise RunCoachError("early failure")
 
+    # monkeypatch：临时把 send_message 换成直接抛错的版本，模拟"未发事件先崩溃"。
     monkeypatch.setattr(app.state.chat_service, "send_message", fail_without_event)
+    # asyncio.timeout：限时守卫，若 SSE 流不结束则测试超时失败。
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         async with asyncio.timeout(2):
             async with client.stream(

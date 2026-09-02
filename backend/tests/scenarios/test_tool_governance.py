@@ -58,6 +58,7 @@ async def test_unregistered_tool_returns_tool_not_found(
     slice_seed,
     clock,
 ) -> None:
+    """场景：调用从未注册的 Tool → 期望：tool_not_found，与「隐藏但存在」的 tool_not_available 区分。"""
     reasoner = ScriptedReasoner(
         [
             ToolCallAction(
@@ -212,6 +213,7 @@ async def test_cross_user_workout_detail_not_accessible(
 async def _get_other_user_workout_id(
     sessions: async_sessionmaker[AsyncSession], user_id: UUID
 ) -> UUID:
+    """取指定用户的任一条训练记录 ID，供跨用户越权访问测试使用。"""
     from sqlalchemy import select
 
     async with short_session(sessions) as session:
@@ -233,6 +235,8 @@ async def test_session_run_id_mismatch_fails_agent_run(
     """场景 10：ToolSession 与 run_id 不一致属于 Runtime 不变量破坏，AgentRun failed。"""
 
     class MismatchedSessionReasoner:
+        """第一轮发起 Tool 调用，之后等待 Runtime 因不变量破坏而失败。"""
+
         def __init__(self) -> None:
             self.count = 0
 
@@ -255,6 +259,7 @@ async def test_session_run_id_mismatch_fails_agent_run(
         session = original_create(run_id=uuid4())  # 错误的 run_id
         return session
 
+    # monkeypatch.setattr：测试期间临时替换属性；此处拦截 create_session 制造 run_id 不一致。
     monkeypatch.setattr(app.state.tool_runtime, "create_session", create_mismatched_session)
     context = request_context_for(slice_seed.user_id, clock)
     with pytest.raises(ToolRuntimeError):
@@ -283,6 +288,8 @@ async def test_tool_runtime_error_from_execution_fails_agent_run(
         model_config = ConfigDict(extra="forbid")
 
     class InvariantProbeTool:
+        """execute 一被调用就抛 ToolRuntimeError 的探测 Tool。"""
+
         @property
         def definition(self) -> ToolDefinition:
             return ToolDefinition(

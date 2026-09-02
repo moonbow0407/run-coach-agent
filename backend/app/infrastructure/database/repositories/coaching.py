@@ -47,6 +47,8 @@ from app.infrastructure.database.session import short_session
 
 
 class SqlAlchemyWorkoutRepository:
+    """真实训练记录仓储：只做取数与映射。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
@@ -138,10 +140,13 @@ class SqlAlchemyWorkoutRepository:
 
 
 class SqlAlchemyGoalRepository:
+    """训练目标仓储。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
     async def get_active(self, *, user_id: UUID) -> TrainingGoal | None:
+        """取当前生效目标；每个用户至多一个 active（数据库部分唯一索引保证）。"""
         stmt = select(TrainingGoalRow).where(
             TrainingGoalRow.user_id == user_id,
             TrainingGoalRow.status == GoalStatus.ACTIVE.value,
@@ -152,6 +157,8 @@ class SqlAlchemyGoalRepository:
 
 
 class SqlAlchemyPlanRepository:
+    """训练计划仓储：计划版本与计划内课次的查询。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
@@ -194,6 +201,8 @@ class SqlAlchemyPlanRepository:
 
 
 class SqlAlchemyAthleteStateRepository:
+    """跑者状态快照仓储：只读最新版本。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
@@ -209,13 +218,15 @@ class SqlAlchemyAthleteStateRepository:
             return athlete_state_from_row(row) if row else None
 
 
-_UNRESOLVED_STATUSES = (
+_UNRESOLVED_STATUSES = (  # 尚未定论的提案状态：同一用户同时最多一条（部分唯一索引兜底）
     PlanChangeStatus.DRAFT.value,
     PlanChangeStatus.PENDING_CONFIRMATION.value,
 )
 
 
 class SqlAlchemyPlanChangeRepository:
+    """计划调整提案仓储：提案的查询、创建与状态流转。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
@@ -294,6 +305,7 @@ class SqlAlchemyPlanChangeRepository:
                 await session.flush()
                 return plan_change_from_row(row)
         except IntegrityError as exc:
+            # 部分唯一索引拦截"已存在未解决提案"的并发创建，归一为业务冲突
             raise ConflictError("unresolved_plan_change_exists") from exc
 
     async def transition(

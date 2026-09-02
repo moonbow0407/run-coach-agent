@@ -11,74 +11,86 @@ from app.coaching.ports.plan_activation_store import PlanActivationResult
 
 
 class SessionChangeResponse(BaseModel):
+    """单节课调整前后的对比。"""
+
     model_config = ConfigDict(extra="forbid")
 
     source_session_id: UUID
-    scheduled_date: date
-    from_type: str
-    to_type: str
-    old_title: str
-    new_title: str
-    old_prescription: dict[str, Any]
-    new_prescription: dict[str, Any]
+    scheduled_date: date  # 调整后的上课日期
+    from_type: str  # 原课型
+    to_type: str  # 新课型
+    old_title: str  # 原课次标题
+    new_title: str  # 新课次标题
+    old_prescription: dict[str, Any]  # 原训练处方（配速 / 距离等参数）
+    new_prescription: dict[str, Any]  # 新训练处方
 
 
 class PlanChangePayloadResponse(BaseModel):
+    """提案正文：影响范围与逐课变更。"""
+
     model_config = ConfigDict(extra="forbid")
 
-    horizon_days: int
-    changes: list[SessionChangeResponse]
+    horizon_days: int  # 调整影响的未来天数范围
+    changes: list[SessionChangeResponse]  # 逐课变更列表
 
 
 class PlanChangeResponse(BaseModel):
+    """一次计划调整提案的完整视图。"""
+
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
     user_id: UUID
     from_plan_id: UUID
-    from_plan_version: int
+    from_plan_version: int  # 调整前计划的版本号
     based_on_state_id: UUID
-    based_on_state_version: int
+    based_on_state_version: int  # 提案所基于的跑者状态快照版本
     source_turn_id: UUID | None
     source_run_id: UUID | None
-    as_of: datetime
-    change_type: str
-    payload: PlanChangePayloadResponse
-    reason: str
-    status: str
-    created_at: datetime
-    resolved_at: datetime | None
+    as_of: datetime  # 提案生成的时间点
+    change_type: str  # 调整类型
+    payload: PlanChangePayloadResponse  # 提案正文（逐课变更）
+    reason: str  # 调整理由（面向用户解释）
+    status: str  # 提案状态（待确认 / 已确认 / 已拒绝等）
+    created_at: datetime  # 提案创建时间
+    resolved_at: datetime | None  # 提案解决时间（未解决为空）
     resulting_plan_id: UUID | None
 
 
 class PlannedSessionResponse(BaseModel):
+    """窗口内的一节计划训练课。"""
+
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
-    scheduled_date: date
-    session_type: str
-    title: str
-    prescription: dict[str, Any]
+    scheduled_date: date  # 计划上课日期
+    session_type: str  # 课型（如轻松跑 / 间歇）
+    title: str  # 课次标题
+    prescription: dict[str, Any]  # 训练处方（配速 / 距离等参数）
 
 
 class ResultingPlanResponse(BaseModel):
+    """确认提案后生成的新计划（含课次）。"""
+
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
-    version: int
-    status: str
-    starts_on: date
-    ends_on: date
+    version: int  # 新计划版本号
+    status: str  # 计划状态
+    starts_on: date  # 计划开始日期
+    ends_on: date  # 计划结束日期
     goal_id: UUID | None
-    sessions: list[PlannedSessionResponse] = Field(default_factory=list)
+    sessions: list[PlannedSessionResponse] = Field(default_factory=list)  # 新计划的训练课列表
 
 
 class ConfirmPlanChangeResponse(BaseModel):
+    """确认提案的响应：提案最新状态 + 可能生成的新计划。"""
+
     model_config = ConfigDict(extra="forbid")
 
-    plan_change: PlanChangeResponse
+    plan_change: PlanChangeResponse  # 确认后的提案状态
     resulting_plan_id: UUID | None
-    resulting_plan: ResultingPlanResponse | None = None
+    resulting_plan: ResultingPlanResponse | None = None  # 确认生成的新计划详情（可能为空）
 
 
 def to_plan_change_response(change: PlanChange) -> PlanChangeResponse:
@@ -119,7 +131,9 @@ def to_plan_change_response(change: PlanChange) -> PlanChangeResponse:
 
 
 def to_confirm_plan_change_response(result: PlanActivationResult) -> ConfirmPlanChangeResponse:
+    """激活结果 → 确认响应 DTO；未生成新计划时 resulting_plan 留空。"""
     resulting = None
+    # 只有真正生成新计划时才组装其详情。
     if result.resulting_plan is not None:
         resulting = ResultingPlanResponse(
             id=result.resulting_plan.id,

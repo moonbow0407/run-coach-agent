@@ -19,14 +19,16 @@ class VisibleTool:
     parameters_schema 来自注册时由参数模型生成的同一份 Schema。
     """
 
-    name: str
-    description: str
-    parameters_schema: dict[str, Any]
+    name: str  # 工具名
+    description: str  # 面向模型的用途描述
+    parameters_schema: dict[str, Any]  # 模型可见参数 Schema
 
 
 class ToolResolver:
+    """每轮根据会话与 Registry 计算可见工具集；自身无跨轮状态。"""
+
     def __init__(self, *, registry: ToolRegistry) -> None:
-        self._registry = registry
+        self._registry = registry  # 存在性唯一事实来源：已注销工具立即不可见
 
     def visible_names(self, session: ToolSession) -> frozenset[str]:
         """当前可见名称集合：always-on ∪ 已发现，均要求仍在 Registry 中。"""
@@ -39,6 +41,7 @@ class ToolResolver:
         return frozenset(names)
 
     def is_visible(self, session: ToolSession, name: str) -> bool:
+        """判断工具对当前会话是否可见（Executor 执行前的门槛之一）。"""
         return name in self.visible_names(session)
 
     def visible_tools(self, session: ToolSession) -> list[VisibleTool]:

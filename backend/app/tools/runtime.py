@@ -17,6 +17,8 @@ from app.tools.resolver.session import ToolSession
 
 
 class ToolRuntime:
+    """组合 Registry/Resolver/Executor 的门面，对 Agent Core 暴露稳定操作。"""
+
     def __init__(
         self,
         *,
@@ -24,9 +26,9 @@ class ToolRuntime:
         resolver: ToolResolver,
         executor: ToolExecutor,
     ) -> None:
-        self._registry = registry
-        self._resolver = resolver
-        self._executor = executor
+        self._registry = registry  # 工具存在性的唯一事实来源
+        self._resolver = resolver  # 每轮可见集合计算
+        self._executor = executor  # 统一治理与错误归一化
 
     def create_session(self, *, run_id: UUID) -> ToolSession:
         """每个 AgentRun 创建独立会话；Run 结束后直接销毁，不跨 Turn 复用。"""

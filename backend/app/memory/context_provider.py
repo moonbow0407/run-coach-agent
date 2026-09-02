@@ -8,8 +8,10 @@ from app.memory.application.retrieval_service import MemoryRetrievalService
 
 
 class RetrievedMemoryContextProvider:
+    """把记忆检索结果映射为 Agent Context 视图；自身不拥有长期数据。"""
+
     def __init__(self, retrieval: MemoryRetrievalService) -> None:
-        self._retrieval = retrieval
+        self._retrieval = retrieval  # 检索服务：真正执行召回与重排的组件
 
     async def load(
         self,
@@ -18,11 +20,13 @@ class RetrievedMemoryContextProvider:
         current_input: str,
         as_of: datetime,
     ) -> tuple[list[MemoryView], list[EpisodeView]]:
+        """以当前输入为查询检索长期记忆，并裁剪为上下文视图字段。"""
         result = await self._retrieval.retrieve(
             user_id=user_id,
             query=current_input,
             as_of=as_of,
         )
+        # 领域对象 → 展示视图：只挑 Context 需要的字段，不透传内部结构。
         semantic = [
             MemoryView(
                 id=item.id,

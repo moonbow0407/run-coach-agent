@@ -28,10 +28,10 @@ AS_OF = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 
 def _session(
     *,
-    scheduled_date: date,
-    session_type: SessionType,
-    title: str = "课次",
-    prescription: dict | None = None,
+    scheduled_date: date,  # 课次计划日期
+    session_type: SessionType,  # 课型（EASY/TEMPO/INTERVAL/RACE 等）
+    title: str = "课次",  # 课次标题（校验 old_title 匹配时依赖）
+    prescription: dict | None = None,  # 训练处方（配速等）
     plan_id=None,
 ) -> PlannedSession:
     return PlannedSession(
@@ -45,6 +45,7 @@ def _session(
 
 
 def test_tempo_and_interval_become_rest_in_window() -> None:
+    """验证：窗口内的节奏/间歇课改为休息且标题/处方被改写，轻松跑保持不动。"""
     tempo = _session(
         scheduled_date=date(2026, 8, 31),
         session_type=SessionType.TEMPO,
@@ -75,6 +76,7 @@ def test_tempo_and_interval_become_rest_in_window() -> None:
 
 
 def test_race_is_not_modified() -> None:
+    """验证：比赛课永不调整，并打上 race_session_not_modified 标记。"""
     race = _session(scheduled_date=date(2026, 8, 30), session_type=SessionType.RACE)
     tempo = _session(scheduled_date=date(2026, 8, 31), session_type=SessionType.TEMPO)
     result = generate_reduce_upcoming_load(
@@ -89,6 +91,7 @@ def test_race_is_not_modified() -> None:
 
 
 def test_empty_adaptation_rejected() -> None:
+    """验证：窗口内无可调整课次时拒绝生成空变更（不伪造降负荷）。"""
     easy = _session(scheduled_date=date(2026, 8, 29), session_type=SessionType.EASY)
     with pytest.raises(DomainError, match="no_applicable_sessions"):
         generate_reduce_upcoming_load(
@@ -101,6 +104,7 @@ def test_empty_adaptation_rejected() -> None:
 
 
 def test_precondition_requires_high_or_poor() -> None:
+    """验证：疲劳/恢复未达阈值时拒绝降负荷（防止过度干预）。"""
     tempo = _session(scheduled_date=date(2026, 8, 31), session_type=SessionType.TEMPO)
     with pytest.raises(DomainError, match="state_does_not_require_v1_reduction"):
         generate_reduce_upcoming_load(
@@ -113,6 +117,7 @@ def test_precondition_requires_high_or_poor() -> None:
 
 
 def test_does_not_change_long_run_other_or_rest() -> None:
+    """验证：长距离/其他/休息课不在可调整范围；全部不可调时报 no_applicable_sessions。"""
     sessions = [
         _session(scheduled_date=date(2026, 8, 29), session_type=SessionType.LONG_RUN),
         _session(scheduled_date=date(2026, 8, 30), session_type=SessionType.OTHER),
@@ -129,6 +134,7 @@ def test_does_not_change_long_run_other_or_rest() -> None:
 
 
 def test_validator_rejects_race_replacement() -> None:
+    """验证：激活校验兜底拦截「把比赛课改成休息」的异常 payload（生成器本不该产出）。"""
     plan_id = new_id()
     user_id = uuid4()
     race = _session(
@@ -273,6 +279,7 @@ def _activation_fixture():
 
 
 def _validate(change, plan, state, sessions) -> None:
+    """以 plan 归属用户执行激活校验；合法时静默通过。"""
     validate_reduce_upcoming_load_activation(
         user_id=plan.user_id,
         plan_change=change,
@@ -283,18 +290,22 @@ def _validate(change, plan, state, sessions) -> None:
 
 
 def test_validator_accepts_generated_payload() -> None:
+    """验证：生成器产出的合法 payload 必须能通过激活校验（生成与校验口径一致）。"""
     change, plan, state, sessions = _activation_fixture()
     _validate(change, plan, state, sessions)
 
 
 def test_validator_rejects_out_of_range_horizon() -> None:
+    """验证：被篡改到范围外的 horizon 被拒绝。"""
     change, plan, state, sessions = _activation_fixture()
+    # dataclasses.replace：复制 frozen dataclass 并替换指定字段
     tampered = replace(change, payload=replace(change.payload, horizon_days=365))
     with pytest.raises(DomainError, match="horizon_days_out_of_range"):
         _validate(tampered, plan, state, sessions)
 
 
 def test_validator_rejects_empty_changes() -> None:
+    """验证：空变更集的 payload 在激活时被拒绝。"""
     change, plan, state, sessions = _activation_fixture()
     tampered = replace(change, payload=replace(change.payload, changes=()))
     with pytest.raises(DomainError, match="empty_plan_change"):
@@ -302,6 +313,7 @@ def test_validator_rejects_empty_changes() -> None:
 
 
 def test_validator_rejects_duplicate_source_session() -> None:
+    """验证：同一课次在变更集中重复出现被拒绝（防止双重改写）。"""
     change, plan, state, sessions = _activation_fixture()
     duplicated = replace(
         change, payload=replace(change.payload, changes=change.payload.changes * 2)
@@ -311,6 +323,7 @@ def test_validator_rejects_duplicate_source_session() -> None:
 
 
 def test_validator_rejects_tampered_old_fields() -> None:
+    """验证：old/new 各字段与基线不符时逐项被拒（payload 不可被篡改）。"""
     change, plan, state, sessions = _activation_fixture()
     first = change.payload.changes[0]
     tampered_change = replace(first, old_title="被篡改的标题")
@@ -347,6 +360,7 @@ def test_validator_rejects_tampered_old_fields() -> None:
 
 
 def test_validator_rejects_session_date_outside_plan_range() -> None:
+    """验证：课次日期超出 Plan 起止范围时激活被拒绝。"""
     change, plan, state, sessions = _activation_fixture()
     # 窗口内、但落在 Plan 日期范围之外（ends_on 早于课次日期）。
     shortened_plan = replace(plan, ends_on=date(2026, 8, 30))
@@ -355,6 +369,7 @@ def test_validator_rejects_session_date_outside_plan_range() -> None:
 
 
 def test_validator_recheck_safety_precondition() -> None:
+    """验证：激活时复核安全前提——即使 state id/version 匹配，前提不满足仍拒绝。"""
     change, plan, state, sessions = _activation_fixture()
     # 即使 state id/version 匹配，也要求 state 本身仍满足 v1 前提。
     moderate_state = replace(

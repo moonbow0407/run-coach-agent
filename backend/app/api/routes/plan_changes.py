@@ -26,6 +26,7 @@ from app.identity.application.request_context import RequestContext
 router = APIRouter()
 
 
+# 从 app.state 取启动时装配好的计划调整应用服务。
 def _adaptation(request: Request) -> PlanAdaptationService:
     return request.app.state.plan_adaptation_service
 
@@ -67,6 +68,7 @@ async def get_plan_change(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> PlanChangeResponse:
+    """按 ID 查询提案详情（任意状态）。"""
     try:
         change = await _adaptation(request).get(
             user_id=request_context.user_id, plan_change_id=plan_change_id
@@ -85,6 +87,7 @@ async def confirm_plan_change(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> ConfirmPlanChangeResponse:
+    """确认提案：应用变更、激活新计划版本，并发布后续持久化事件。"""
     try:
         result = await _adaptation(request).confirm(
             user_id=request_context.user_id,
@@ -95,6 +98,7 @@ async def confirm_plan_change(
             ),
         )
     except StalePlanChangeError as exc:
+        # 提案已被处理（状态过期）：返回 409 并附最新提案，前端据此刷新界面。
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -118,6 +122,7 @@ async def reject_plan_change(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> PlanChangeResponse:
+    """拒绝提案：记录决议，原计划保持不变。"""
     try:
         change = await _adaptation(request).reject(
             user_id=request_context.user_id, plan_change_id=plan_change_id

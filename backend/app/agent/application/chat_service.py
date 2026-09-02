@@ -41,8 +41,8 @@ class ChatResult:
 
     thread_id: UUID
     turn_id: UUID
-    message_id: UUID
-    content: str
+    message_id: UUID  # 本轮助手消息 ID
+    content: str  # 助手最终回答文本
     run_id: UUID
 
 
@@ -59,9 +59,9 @@ class ChatService:
         runtime: AgentRuntime,
         lifecycle: LifecycleDispatcher,
     ) -> None:
-        self._store = conversation_store
-        self._runtime = runtime
-        self._lifecycle = lifecycle
+        self._store = conversation_store  # 会话存储端口：Thread/Turn 消息的事务边界
+        self._runtime = runtime  # Agent 推理循环，只负责 reasoning
+        self._lifecycle = lifecycle  # 生命周期事件分发
 
     async def send_message(
         self,

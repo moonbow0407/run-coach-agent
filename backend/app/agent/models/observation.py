@@ -15,9 +15,9 @@ class Observation(BaseModel):
     无论成败都会记入 ReasoningState，模型可以据此调整下一步。
     """
 
-    source: str
-    status: Literal["success", "error"]
-    data: Any | None = None
-    error_code: str | None = None
-    error: str | None = None
-    model_call_id: str = Field(min_length=1)
+    source: str  # 产生该结果的工具名 / 来源标识
+    status: Literal["success", "error"]  # 工具执行是否成功
+    data: Any | None = None  # 成功时的返回数据，结构由具体工具决定
+    error_code: str | None = None  # 失败时的结构化错误码（ToolErrorCode）
+    error: str | None = None  # 失败时的安全错误说明，不含敏感细节
+    model_call_id: str = Field(min_length=1)  # 触发本次结果的模型协议 ID，回传时用于配对

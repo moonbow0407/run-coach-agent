@@ -20,9 +20,12 @@ class LLMReasoner:
         self._renderer = renderer
 
     async def reason(self, context: ReasoningContext) -> AgentAction:
+        """渲染上下文为 native 请求，调用模型并归一化为单个 Action。"""
+        # 把上下文 + 已发生交互 + 当前可见 Tool 渲染成完整模型请求
         request = self._renderer.render(
             context.context_bundle, context.state, context.visible_tools
         )
+        # 供应商协议细节由 Provider 隔离，这里只面向归一化后的响应
         response = await self._provider.generate(request)
 
         if len(response.tool_calls) > 1:

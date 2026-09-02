@@ -36,6 +36,8 @@ async def test_arq_duplicate_delivery_has_one_completed_receipt(
     user_id,
     clock,
 ) -> None:
+    """验证：同一事件被 ARQ 重复投递（崩溃恢复重投 + 手动重发），handler 只执行一次，receipt 幂等去重。"""
+    # 直连本机真实 Redis（DB 14），测试前后 flushdb 清库，finally 保证清理。
     redis = await create_pool(RedisSettings(host="localhost", port=6379, database=REDIS_DB))
     await redis.flushdb()
     try:
@@ -115,6 +117,7 @@ async def test_arq_transient_retry_succeeds_and_permanent_failure_dead_letters(
     user_id,
     clock,
 ) -> None:
+    """验证：瞬时错误自动重试后成功完成，永久错误直接死信；两类错误的 receipt 都到达终态。"""
     redis = await create_pool(RedisSettings(host="localhost", port=6379, database=REDIS_DB))
     await redis.flushdb()
     try:
@@ -185,6 +188,7 @@ async def test_arq_transient_retry_succeeds_and_permanent_failure_dead_letters(
         await redis.aclose()
 
 async def _run_burst(redis, runner: ConsumerRunner) -> None:
+    """用真实 arq Worker 以 burst 模式消费：跑完当前队列即退出，任务经 ctx 注入 ConsumerRunner。"""
     worker = Worker(
         functions=[consume_durable_task],
         redis_pool=redis,
@@ -199,6 +203,7 @@ async def _run_burst(redis, runner: ConsumerRunner) -> None:
 
 
 async def _published_task(event, clock):
+    """按正式路由规则把事件包装成队列任务（含确定性 job id）。"""
     from app.workers.routing import route_event
 
     return route_event(event, enqueued_at=clock.now())

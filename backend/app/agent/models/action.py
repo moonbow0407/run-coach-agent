@@ -17,17 +17,17 @@ class ToolCallAction(BaseModel):
     Lifecycle / RunStep）使用 Runtime 生成的 UUID call_id，两者不混用。
     """
 
-    type: Literal["tool_call"] = "tool_call"
-    tool: str = Field(min_length=1)
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    type: Literal["tool_call"] = "tool_call"  # 判别字段：标记这是工具调用请求
+    tool: str = Field(min_length=1)  # 目标工具名
+    arguments: dict[str, Any] = Field(default_factory=dict)  # 模型给出的业务参数
     model_call_id: str = Field(min_length=1)
 
 
 class FinalAction(BaseModel):
     """结束推理：content 即给用户的最终回答。"""
 
-    type: Literal["final"] = "final"
-    content: str
+    type: Literal["final"] = "final"  # 判别字段：标记这是最终回答
+    content: str  # 给用户的最终回答文本
 
 
 # 模型单轮输出的合法类型合集

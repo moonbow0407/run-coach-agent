@@ -21,9 +21,9 @@ def issue_token(
 ) -> str:
     """为指定用户签发 JWT；sub 字段即 user_id。仅供本地脚本 / 测试使用。"""
     payload = {
-        "sub": str(user_id),
-        "iat": int(now.timestamp()),
-        "exp": int(now.timestamp()) + expire_seconds,
+        "sub": str(user_id),  # JWT 标准声明：主体，这里即用户 ID
+        "iat": int(now.timestamp()),  # 签发时间（Unix 秒）
+        "exp": int(now.timestamp()) + expire_seconds,  # 过期时间（Unix 秒）
     }
     return jwt.encode(payload, secret, algorithm=algorithm)
 

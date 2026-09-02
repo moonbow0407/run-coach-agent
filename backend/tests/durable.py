@@ -13,6 +13,8 @@ from app.workers.publisher import OutboxPublisher
 
 
 class CollectingQueue:
+    """arq 队列替身：把任务收进内存列表，不真正投递 Redis。"""
+
     def __init__(self) -> None:
         self.tasks: list[WorkerTaskEnvelope] = []
 
@@ -26,6 +28,7 @@ class CollectingQueue:
 
 
 async def drain_durable_tasks(app) -> tuple[ConsumeResult, ...]:
+    """把 app 内 outbox 积压任务全部经真实 publisher/consumer 链路消化，返回逐条消费结果。"""
     container = app.state.container
     queue = CollectingQueue()
     outbox = SqlAlchemyOutboxRepository(container.sessions)
@@ -52,10 +55,11 @@ async def drain_durable_tasks(app) -> tuple[ConsumeResult, ...]:
     results: list[ConsumeResult] = []
     consumed = 0
     while True:
+        # 每轮：publisher 从 outbox 认领一批任务入队，consumer 逐条消费并写 receipt
         published = await publisher.publish_batch()
         while consumed < len(queue.tasks):
             results.append(await runner.consume(queue.tasks[consumed]))
             consumed += 1
         if published.claimed == 0:
-            break
+            break  # 本轮无新认领，说明 outbox 已全部排干
     return tuple(results)

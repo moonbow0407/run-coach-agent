@@ -26,12 +26,15 @@ from app.tools.resolver.session import ToolSession
 
 logger = logging.getLogger(__name__)
 
+# 模型可直接执行的风险等级白名单；MUTATING 只能走用户确认流程。
 _MODEL_EXECUTABLE_RISKS = frozenset(
     {ToolRisk.READ_ONLY, ToolRisk.ANALYZE, ToolRisk.DRAFT}
 )
 
 
 class ToolExecutor:
+    """统一执行器：治理顺序与错误归一化集中在此，工具只需实现业务。"""
+
     def __init__(
         self,
         *,
@@ -142,6 +145,7 @@ class ToolExecutor:
 def _error_observation(
     action: ToolCallAction, error_code: ToolErrorCode, message: str
 ) -> Observation:
+    """构造带错误码的错误 Observation，交回 Reasoner 继续推理。"""
     return Observation(
         source=action.tool,
         status="error",

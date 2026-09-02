@@ -39,6 +39,7 @@ from app.infrastructure.seed.vertical_slice import seed_vertical_slice
 
 
 def _services(sessions: async_sessionmaker[AsyncSession], clock: FrozenClock):
+    """组装重算与计划适配服务（共享 session 工厂与 OutboxWriter），返回 (recompute, adaptation, plans)。"""
     plans = SqlAlchemyPlanRepository(sessions)
     snapshots = SqlAlchemyAthleteStateRepository(sessions)
     recompute = AthleteStateRecomputeService(
@@ -62,8 +63,10 @@ async def test_training_plan_user_version_unique(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：同一用户的训练计划版本号唯一，重复插入 V1 违反唯一约束。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
+    # pytest.raises：断言提交时抛 IntegrityError（数据库层唯一约束兜底）。
     async with sessions() as session:
         session.add(
             TrainingPlanRow(
@@ -86,9 +89,11 @@ async def test_one_unresolved_plan_change_per_user(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：每用户同时只允许一个未决提案，再次提议报 ConflictError。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     recompute, adaptation, _plans = _services(sessions, clock)
+    # 先重算出高疲劳 V2 快照，降负荷提案才满足领域前置条件。
     await recompute.recompute(user_id=seed.user_id, as_of=clock.now())
     first, _ = await adaptation.propose_reduce_upcoming_load(
         user_id=seed.user_id,
@@ -119,9 +124,11 @@ async def test_confirm_activates_new_plan_and_is_idempotent(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：确认后生成并激活 V2 计划、V1 置 superseded；重复确认幂等且只发一次确认事件。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     recompute, adaptation, plans = _services(sessions, clock)
+    # 重算出高疲劳快照，使降负荷提案合法。
     await recompute.recompute(user_id=seed.user_id, as_of=clock.now())
     turn_id = new_id()
     change, _ = await adaptation.propose_reduce_upcoming_load(
@@ -138,6 +145,7 @@ async def test_confirm_activates_new_plan_and_is_idempotent(
     result = await adaptation.confirm(user_id=seed.user_id, plan_change_id=change.id)
     assert result.plan_change.status is PlanChangeStatus.CONFIRMED
     assert result.resulting_plan is not None
+    # V2 内容：节奏课改轻松课、周日改为休息课且处方清空。
     assert result.resulting_plan.version == 2
     assert result.resulting_plan.status is PlanStatus.ACTIVE
     old = await plans.get(user_id=seed.user_id, plan_id=seed.plan_id)
@@ -174,6 +182,7 @@ async def test_confirm_stale_when_plan_version_changed(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：提案所依据的计划版本已被替代时 confirm 报 Stale，提案状态落为 STALE。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     recompute, adaptation, _plans = _services(sessions, clock)
@@ -190,6 +199,7 @@ async def test_confirm_stale_when_plan_version_changed(
         reason="降负荷",
     )
     await adaptation.promote_draft_for_turn(user_id=seed.user_id, turn_id=turn_id)
+    # 绕过服务直接把 V1 置 superseded 并插入 V2，模拟"提案提出后计划被人动过"。
     async with short_session(sessions, commit=True) as session:
         old = await session.get(TrainingPlanRow, seed.plan_id)
         assert old is not None
@@ -217,6 +227,7 @@ async def test_confirm_stale_when_state_version_changed(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：提案所依据的运动员状态版本过期（出现更新快照）时，confirm 同样拒绝。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     recompute, adaptation, _plans = _services(sessions, clock)
@@ -245,6 +256,7 @@ async def test_cross_user_plan_change_is_not_found(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：B 用户查询 A 的提案按 NotFound 处理，不暴露他人提案的存在。"""
     async with short_session(sessions, commit=True) as session:
         seed_a = await seed_vertical_slice(session)
         seed_b = await seed_vertical_slice(session)
@@ -271,6 +283,7 @@ async def test_activation_does_not_update_old_sessions(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：激活生成全新课次行，旧计划课次原样保留——历史计划不可被就地改写。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
         original_ids = set(
@@ -411,18 +424,22 @@ async def test_concurrent_confirm_and_reject_reach_consistent_state(
 
 
 def _tamper_horizon(payload: dict) -> dict:
+    """篡改一：把 horizon_days 改为 365，超出提案确认时允许的范围。"""
     return {"horizon_days": 365, "changes": payload["changes"]}
 
 
 def _tamper_empty(payload: dict) -> dict:
+    """篡改二：把 changes 清空，制造无有效修改项的提案。"""
     return {"horizon_days": payload["horizon_days"], "changes": []}
 
 
 def _tamper_duplicate(payload: dict) -> dict:
+    """篡改三：重复同一条修改项，制造重复目标日冲突。"""
     return {**payload, "changes": payload["changes"] * 2}
 
 
 def _tamper_old_title(payload: dict) -> dict:
+    """篡改四：改写 old_title，使提案与基于的 V1 计划对不上。"""
     return {
         **payload,
         "changes": [{**payload["changes"][0], "old_title": "被篡改的标题"}],
@@ -430,6 +447,7 @@ def _tamper_old_title(payload: dict) -> dict:
 
 
 def _tamper_new_prescription(payload: dict) -> dict:
+    """篡改五：改写 new_prescription，与提案生成时承诺的内容不一致。"""
     return {
         **payload,
         "changes": [{**payload["changes"][0], "new_prescription": {"pace": "5:00"}}],

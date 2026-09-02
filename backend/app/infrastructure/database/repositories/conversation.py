@@ -67,6 +67,7 @@ class SqlAlchemyConversationStore:
 
         async with short_session(self._sessions, commit=True) as session:
             if thread_id is None:
+                # 未指定线程：本轮对话新建一个 Thread
                 thread = ThreadRow(
                     id=new_id(),
                     user_id=user_id,
@@ -289,6 +290,8 @@ class SqlAlchemyConversationStore:
 
 
 class SqlAlchemyConversationReader:
+    """对话只读查询：只暴露已提交事实，供历史查询与上下文装配。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 

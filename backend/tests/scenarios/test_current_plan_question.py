@@ -1,3 +1,8 @@
+"""端到端教练场景测试：用户直接询问当前计划。
+
+无需任何 Tool 调用：推理器基于 WorkingContext 注入的活跃计划摘要即可作答。
+"""
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -11,6 +16,7 @@ async def test_current_plan_question_uses_working_context(
     slice_seed,
     slice_auth_header,
 ) -> None:
+    """场景：用户问「下周比赛，现在计划是什么」→ 期望：不调 Tool，直接基于上下文中的 v1 计划作答。"""
     # 不按关键词路由；Reasoner 自行决定直接给出 Final。
     reasoner = ScriptedReasoner([FinalAction(content="当前计划覆盖第 6 周。")])
     app = make_app(reasoner=reasoner)
@@ -22,8 +28,10 @@ async def test_current_plan_question_uses_working_context(
         )
     assert response.status_code == 200
     assert response.json()["content"] == "当前计划覆盖第 6 周。"
+    # 上下文应自动注入活跃计划摘要：版本与课次数与 seed 一致。
     bundle = reasoner.seen_contexts[0].context_bundle
     assert bundle.working_context.active_plan is not None
     assert bundle.working_context.active_plan.version == 1
     assert len(bundle.working_context.active_plan.sessions) == 2
+    # 全程无任何 Tool 交互，纯上下文作答。
     assert reasoner.seen_contexts[0].state.interactions == []

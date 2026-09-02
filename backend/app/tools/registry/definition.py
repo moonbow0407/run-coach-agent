@@ -7,17 +7,17 @@ from enum import StrEnum
 class ToolRisk(StrEnum):
     """风险等级。模型 Runtime 允许 READ_ONLY / ANALYZE / DRAFT，拒绝 MUTATING。"""
 
-    READ_ONLY = "read_only"
-    ANALYZE = "analyze"
-    DRAFT = "draft"
-    MUTATING = "mutating"
+    READ_ONLY = "read_only"  # 只读查询
+    ANALYZE = "analyze"  # 确定性分析计算，不改数据
+    DRAFT = "draft"  # 只创建草案（如调整提案），不影响生效数据
+    MUTATING = "mutating"  # 直接改写数据：仅用户确认流程可执行
 
 
 class ToolSource(StrEnum):
     """Tool 的提供方来源，用于区分系统级与领域级能力。"""
 
-    SYSTEM = "system"
-    COACHING = "coaching"
+    SYSTEM = "system"  # 系统级工具（如 search_tools）
+    COACHING = "coaching"  # Coaching 领域工具
 
 
 @dataclass(frozen=True)

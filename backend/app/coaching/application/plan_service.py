@@ -31,6 +31,8 @@ class ActivePlanSummary:
 
 
 class PlanQueryService:
+    """训练计划查询服务：产出受 Tool Result Budget 约束的计划摘要。"""
+
     def __init__(self, repository: PlanRepository) -> None:
         self._repository = repository
 
@@ -50,8 +52,10 @@ class PlanQueryService:
             return None
         sessions = await self._repository.list_sessions(user_id=user_id, plan_id=plan.id)
 
+        # 窗口起点取 as_of 所在 ISO 周的周一；终点为 as_of 起 14 天。
         window_start = as_of.date() - timedelta(days=as_of.weekday())
         window_end = as_of.date() + timedelta(days=PLAN_SESSION_WINDOW_DAYS - 1)
+        # 只保留窗口内课次，按日期（再按标题保证确定性）排序。
         scoped = sorted(
             (
                 session
@@ -60,6 +64,7 @@ class PlanQueryService:
             ),
             key=lambda session: (session.scheduled_date, session.title),
         )
+        # 超过硬上限时截断并显式标记，让调用方知道结果不完整。
         truncated = len(scoped) > PLAN_SESSION_MAX_COUNT
         return ActivePlanSummary(
             plan=plan,

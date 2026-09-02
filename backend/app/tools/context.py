@@ -17,10 +17,10 @@ class ToolExecutionContext:
     """
 
     user_id: UUID
-    thread_id: UUID
-    turn_id: UUID
-    run_id: UUID
+    thread_id: UUID  # 会话线程 ID（用户的历次对话串在其下）
+    turn_id: UUID  # 当前 Turn（一轮对话）ID
+    run_id: UUID  # 当前 Run（一次 Agent 推理运行）ID
     call_id: UUID
-    request_id: UUID
-    trace_id: UUID
+    request_id: UUID  # 请求级链路追踪 ID
+    trace_id: UUID  # 跨服务链路追踪 ID
     timestamp: datetime

@@ -62,6 +62,7 @@ class KeywordToolSearch:
         self._documents: dict[str, _IndexedDocument] = {}
 
     def add(self, document: ToolSearchDocument) -> None:
+        """把工具文档加入索引，并预计算各字段的 token 形态。"""
         self._documents[document.name] = _IndexedDocument(
             document=document,
             name_tokens=extract_tokens(document.name),
@@ -75,6 +76,7 @@ class KeywordToolSearch:
         )
 
     def remove(self, name: str) -> None:
+        """从索引移除工具；不存在则 KeyError（由 Registry 先行校验不变量）。"""
         if name not in self._documents:
             raise KeyError(f"搜索索引中不存在 Tool: {name}")
         del self._documents[name]

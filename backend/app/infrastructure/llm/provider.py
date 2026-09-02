@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 
 class LLMProvider(Protocol):
+    """LLM Provider 端口：Protocol（结构化鸭子类型，只约束方法签名不要求继承）。"""
+
     async def generate(self, request: ModelRequest) -> ModelResponse: ...
 
 
@@ -44,11 +46,12 @@ class OpenAICompatibleProvider:
         self._model = model
 
     async def generate(self, request: ModelRequest) -> ModelResponse:
+        """调用模型并把协议结果转回 provider-neutral 的 ModelResponse。"""
         kwargs: dict[str, object] = {
             "model": self._model,
             "messages": [_to_openai_message(message) for message in request.messages],
         }
-        if request.tools:
+        if request.tools:  # 声明可用工具；并行调用关闭，保证推理循环单步单调用
             kwargs["tools"] = [
                 {
                     "type": "function",
@@ -64,13 +67,13 @@ class OpenAICompatibleProvider:
         try:
             response = await self._client.chat.completions.create(**kwargs)
         except APIError as exc:
-            raise InfrastructureError("LLM 调用失败") from exc
+            raise InfrastructureError("LLM 调用失败") from exc  # SDK 异常归一为基础设施错误
 
         choice = response.choices[0] if response.choices else None
         message = choice.message if choice else None
         text = (message.content if message is not None else None) or ""
         tool_calls = _parse_tool_calls(message.tool_calls if message is not None else None)
-        if not text.strip() and not tool_calls:
+        if not text.strip() and not tool_calls:  # 既无文本也无工具调用：模型空响应
             raise ReasonerError("模型返回空输出")
 
         usage = None

@@ -1,4 +1,8 @@
-"""Phase 3 场景：分析 Tools、草案、生命周期与确认边界。"""
+"""Phase 3 教练智能场景：分析 Tools 与计划调整提案（PlanChange）生命周期。
+
+模拟疲劳偏高的跑者请求负荷/课次分析并提出降负荷调整：
+验证提案从 DRAFT 到确认的完整边界，失败或取消时正确放弃。
+"""
 
 import asyncio
 from datetime import date, timedelta
@@ -25,10 +29,12 @@ from tests.helpers import request_context_for
 
 
 def _call(tool: str, arguments: dict, call_id: str) -> ToolCallAction:
+    """构造脚本中的一步：一次模型 Tool 调用动作。"""
     return ToolCallAction(tool=tool, arguments=arguments, model_call_id=call_id)
 
 
 def _observation_for_tool(reasoner: ScriptedReasoner, tool: str):
+    """倒序查找指定 Tool 最近一次的执行观察（Observation），找不到即断言失败。"""
     for context in reversed(reasoner.seen_contexts):
         for item in context.state.interactions:
             if getattr(item, "source", None) == tool:
@@ -37,6 +43,7 @@ def _observation_for_tool(reasoner: ScriptedReasoner, tool: str):
 
 
 async def _latest_change(sessions, user_id) -> PlanChangeRow:
+    """查询该用户最新一条落库的计划调整提案（PlanChange）记录。"""
     async with short_session(sessions) as session:
         row = await session.scalar(
             select(PlanChangeRow)
@@ -49,6 +56,7 @@ async def _latest_change(sessions, user_id) -> PlanChangeRow:
 
 @pytest.mark.asyncio
 async def test_query_does_not_compute_without_snapshot(make_app, user_id, clock) -> None:
+    """场景：无任何状态快照的用户问「我状态怎么样」→ 期望：读取 Tool 成功返回空数据，不凭空计算。"""
     reasoner = ScriptedReasoner(
         [
             _call("search_tools", {"query": "跑者状态 疲劳"}, "c1"),
@@ -69,6 +77,7 @@ async def test_query_does_not_compute_without_snapshot(make_app, user_id, clock)
 
 @pytest.mark.asyncio
 async def test_hidden_analyze_training_load_rejected(make_app, slice_seed, clock) -> None:
+    """场景：模型未经发现直接点名隐藏 Tool → 期望：报错 tool_not_available，隐藏即不可用。"""
     reasoner = ScriptedReasoner(
         [
             _call("analyze_training_load", {}, "c1"),
@@ -90,6 +99,7 @@ async def test_hidden_analyze_training_load_rejected(make_app, slice_seed, clock
 async def test_analyze_training_load_observation_is_partial(
     make_app, slice_seed, clock
 ) -> None:
+    """场景：分析近 7 天负荷但部分训练缺 sRPE → 期望：标记部分覆盖并给出可信的覆盖率。"""
     reasoner = ScriptedReasoner(
         [
             _call("search_tools", {"query": "analyze_training_load srpe coverage", "limit": 5}, "c1"),
@@ -111,6 +121,7 @@ async def test_analyze_training_load_observation_is_partial(
     assert current["is_partial"] is True
     assert current["partial_srpe_load"] is not None
     assert current["srpe_coverage"] is not None
+    # seed 四次训练里只有间歇课有 sRPE 反馈，覆盖率必然不到一半。
     assert current["srpe_coverage"] < 0.5
 
 
@@ -118,8 +129,10 @@ async def test_analyze_training_load_observation_is_partial(
 async def test_analyze_workout_returns_facts_not_completed(
     make_app, slice_seed, clock, sessions
 ) -> None:
+    """场景：分析上次间歇课 → 期望：只回原始事实（反馈、sRPE 负荷、心率），不替教练下「完成」结论。"""
     last_id = slice_seed.workout_ids[-1]
     async with short_session(sessions, commit=True) as session:
+        # 手工补一条与间歇同日（8/27）的计划课次，验证分析结果能带出当日计划。
         session.add(
             PlannedSessionRow(
                 id=new_id(),
@@ -149,6 +162,7 @@ async def test_analyze_workout_returns_facts_not_completed(
     assert data["workout"]["workout_type"] == "interval"
     assert data["feedback"]["perceived_exertion"] == 8
     assert data["feedback"]["note"] == "最后两组间歇明显掉速"
+    # sRPE 负荷 = 时长（分钟）× 主观用力分值：间歇 42 分钟 × 用力 8 = 336。
     assert data["session_rpe_load"] == (2520 / 60.0) * 8
     assert data["quality_session"] is True
     assert data["heart_rate"]["avg"] == 168
@@ -158,10 +172,12 @@ async def test_analyze_workout_returns_facts_not_completed(
 
 @pytest.mark.asyncio
 async def test_recompute_then_working_context_sees_v2(make_app, slice_seed, clock) -> None:
+    """场景：先重算状态快照再对话 → 期望：推理器在工作上下文中看到 v2 最新快照。"""
     setup = make_app(reasoner=ScriptedReasoner([FinalAction(content="unused")]))
     snapshot = await setup.state.athlete_recompute_service.recompute(
         user_id=slice_seed.user_id, as_of=clock.now()
     )
+    # seed 已含 v1 快照，重算后版本推进为 2；间歇跑崩 + 高负荷使疲劳判定为 high、恢复一般。
     assert snapshot.version == 2
     assert snapshot.fatigue_level is FatigueLevel.HIGH
     assert snapshot.recovery_level is RecoveryLevel.FAIR
@@ -180,6 +196,7 @@ async def test_recompute_then_working_context_sees_v2(make_app, slice_seed, cloc
 
 
 async def _propose_turn(make_app, slice_seed, clock, *, final: bool):
+    """准备一轮「发现工具→提出降负荷提案」的对话；final 决定脚本是否以 FinalAction 收尾。"""
     actions: list = [
         _call("search_tools", {"query": "降负荷 调整草案", "limit": 5}, "c1"),
         _call(
@@ -207,6 +224,7 @@ async def _propose_turn(make_app, slice_seed, clock, *, final: bool):
 async def test_propose_keeps_draft_until_commit(
     make_app, slice_seed, clock, sessions
 ) -> None:
+    """场景：只提出提案、Turn 未提交 → 期望：提案停留在 DRAFT，现行计划保持 v1 不动。"""
     # 先提出但不 Final：用单独 service 调用来检查 DRAFT，避免 TurnCommitted。
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="noop")]))
     await app.state.athlete_recompute_service.recompute(
@@ -234,6 +252,7 @@ async def test_propose_keeps_draft_until_commit(
 async def test_turn_committed_promotes_draft(
     make_app, slice_seed, clock, sessions
 ) -> None:
+    """场景：提案后 Turn 正常提交 → 期望：DRAFT 被晋升为 PENDING_CONFIRMATION 等待用户确认。"""
     app, reasoner = await _propose_turn(make_app, slice_seed, clock, final=True)
     await app.state.chat_service.send_message(
         request_context=request_context_for(slice_seed.user_id, clock),
@@ -244,6 +263,7 @@ async def test_turn_committed_promotes_draft(
     assert observation.status == "success"
     assert observation.data["plan_change"]["status"] == "draft"
     assert observation.data["active_plan_unchanged"] is True
+    # drain_durable_tasks：等提交后的后台任务跑完，DRAFT 在此期间被晋升为待确认。
     await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
     assert row.status == PlanChangeStatus.PENDING_CONFIRMATION.value
@@ -251,7 +271,9 @@ async def test_turn_committed_promotes_draft(
 
 @pytest.mark.asyncio
 async def test_failed_turn_abandons_draft(make_app, slice_seed, clock, sessions) -> None:
+    """场景：提案后 Turn 推理失败 → 期望：未确认的提案被置为 ABANDONED。"""
     app, _reasoner = await _propose_turn(make_app, slice_seed, clock, final=False)
+    # 脚本无 FinalAction：脚本耗尽时推理器抛 ReasonerError，模拟推理失败。
     with pytest.raises(ReasonerError):
         await app.state.chat_service.send_message(
             request_context=request_context_for(slice_seed.user_id, clock),
@@ -265,6 +287,7 @@ async def test_failed_turn_abandons_draft(make_app, slice_seed, clock, sessions)
 
 @pytest.mark.asyncio
 async def test_cancelled_turn_abandons_draft(make_app, slice_seed, clock, sessions) -> None:
+    """场景：提案后用户取消仍在执行的 Tool → 期望：提案同样被放弃（ABANDONED）。"""
     from pydantic import BaseModel, ConfigDict
 
     from app.common.errors import TurnCancelled as TurnCancelledError
@@ -276,6 +299,8 @@ async def test_cancelled_turn_abandons_draft(make_app, slice_seed, clock, sessio
         model_config = ConfigDict(extra="forbid")
 
     class SlowTool:
+        """提案后的慢 Tool：睡 30 秒，为「取消」留出操作窗口。"""
+
         @property
         def definition(self) -> ToolDefinition:
             return ToolDefinition(
@@ -337,6 +362,7 @@ async def test_cancelled_turn_abandons_draft(make_app, slice_seed, clock, sessio
 
 @pytest.mark.asyncio
 async def test_mutating_tool_is_not_authorized(make_app, slice_seed, clock) -> None:
+    """场景：调用已注册但属写操作（MUTATING）的 Tool → 期望：被拒 tool_not_authorized，不执行。"""
     from pydantic import BaseModel, ConfigDict
 
     from app.tools.registry.definition import ToolDefinition, ToolRisk, ToolSource
@@ -345,6 +371,8 @@ async def test_mutating_tool_is_not_authorized(make_app, slice_seed, clock) -> N
         model_config = ConfigDict(extra="forbid")
 
     class MutatingTool:
+        """声明为 MUTATING（写操作）风险的探测 Tool，验证默认不被授权。"""
+
         @property
         def definition(self) -> ToolDefinition:
             return ToolDefinition(
@@ -382,6 +410,7 @@ async def test_mutating_tool_is_not_authorized(make_app, slice_seed, clock) -> N
 
 @pytest.mark.asyncio
 async def test_forbidden_tools_are_not_registered(make_app) -> None:
+    """场景：检查敏感 Tool 未对模型开放 → 期望：重算与确认 Tool 均不在注册表中。"""
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="x")]))
     assert app.state.tool_registry.find("recompute_athlete_state") is None
     assert app.state.tool_registry.find("confirm_plan_adaptation") is None
@@ -391,6 +420,7 @@ async def test_forbidden_tools_are_not_registered(make_app) -> None:
 async def test_race_in_window_is_not_modified(
     make_app, slice_seed, clock, sessions
 ) -> None:
+    """场景：调整窗口内含比赛课次 → 期望：比赛课次原样保留，降负荷不波及比赛。"""
     async with short_session(sessions, commit=True) as session:
         session.add(
             PlannedSessionRow(
@@ -409,6 +439,7 @@ async def test_race_in_window_is_not_modified(
         content="降负荷但保留比赛",
     )
     observation = _observation_for_tool(reasoner, "propose_plan_adaptation")
+    # 比赛属于不可降负荷的课种，提案必须显式声明未触碰。
     assert observation.data.get("race_session_not_modified") is True
     changes = observation.data["plan_change"]["payload"]["changes"]
     assert all(item["from_type"] != "race" for item in changes)
@@ -418,6 +449,7 @@ async def test_race_in_window_is_not_modified(
 async def test_confirm_api_activates_and_is_idempotent(
     make_app, slice_seed, clock, sessions, test_settings, slice_auth_header
 ) -> None:
+    """场景：用户通过 API 确认提案 → 期望：生成 v2 ACTIVE 计划，重复确认幂等，旧计划被取代。"""
     app, _reasoner = await _propose_turn(make_app, slice_seed, clock, final=True)
     await app.state.chat_service.send_message(
         request_context=request_context_for(slice_seed.user_id, clock),
@@ -457,6 +489,7 @@ async def test_confirm_api_activates_and_is_idempotent(
 async def test_confirm_stale_plan_and_state_return_409(
     make_app, slice_seed, clock, sessions, slice_auth_header
 ) -> None:
+    """场景：确认前状态快照又被重算 → 期望：基于过期版本的提案确认返回 409 stale。"""
     app, _reasoner = await _propose_turn(make_app, slice_seed, clock, final=True)
     await app.state.chat_service.send_message(
         request_context=request_context_for(slice_seed.user_id, clock),
@@ -465,6 +498,7 @@ async def test_confirm_stale_plan_and_state_return_409(
     )
     await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
+    # 提案确认前快照又被重算，提案依据的状态版本随之过期。
     await app.state.athlete_recompute_service.recompute(
         user_id=slice_seed.user_id, as_of=clock.now() + timedelta(minutes=1)
     )
@@ -481,6 +515,7 @@ async def test_confirm_stale_plan_and_state_return_409(
 async def test_cross_user_plan_change_http_404(
     make_app, slice_seed, clock, sessions, test_settings
 ) -> None:
+    """场景：另一用户读取/确认他人提案 → 期望：一律 404，不泄露资源存在性。"""
     app, _reasoner = await _propose_turn(make_app, slice_seed, clock, final=True)
     await app.state.chat_service.send_message(
         request_context=request_context_for(slice_seed.user_id, clock),
@@ -514,6 +549,7 @@ async def test_cross_user_plan_change_http_404(
 async def test_reject_pending_and_repeat_reject(
     make_app, slice_seed, clock, sessions, slice_auth_header
 ) -> None:
+    """场景：拒绝提案后再拒绝、又想确认 → 期望：拒绝幂等，已拒绝提案不可确认（409）。"""
     app, _reasoner = await _propose_turn(make_app, slice_seed, clock, final=True)
     await app.state.chat_service.send_message(
         request_context=request_context_for(slice_seed.user_id, clock),
@@ -543,6 +579,7 @@ async def test_reject_pending_and_repeat_reject(
 async def test_stale_plan_version_http_409(
     make_app, slice_seed, clock, sessions, slice_auth_header
 ) -> None:
+    """场景：提案期间计划被换版 → 期望：基于旧计划版本的确认返回 409 stale。"""
     app, _reasoner = await _propose_turn(make_app, slice_seed, clock, final=True)
     await app.state.chat_service.send_message(
         request_context=request_context_for(slice_seed.user_id, clock),
@@ -551,6 +588,7 @@ async def test_stale_plan_version_http_409(
     )
     await drain_durable_tasks(app)
     row = await _latest_change(sessions, slice_seed.user_id)
+    # 手工把现行计划换成 v2，模拟确认前计划已被其他途径替换。
     async with short_session(sessions, commit=True) as session:
         old = await session.get(TrainingPlanRow, slice_seed.plan_id)
         assert old is not None

@@ -1,11 +1,15 @@
+"""训练记录仓储端口：Workout 与 Feedback 事实的只读访问。"""
+
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol  # Protocol：结构化鸭子类型，只约束方法签名，不要求继承
 from uuid import UUID
 
 from app.coaching.domain.workout.models import Workout, WorkoutFeedback
 
 
 class WorkoutRepository(Protocol):
+    """训练记录只读仓储；实现方负责 user_id 隔离。"""
+
     async def list_recent(
         self,
         *,
@@ -13,6 +17,7 @@ class WorkoutRepository(Protocol):
         since: datetime,
         limit: int,
     ) -> list[Workout]:
+        """查询 since 之后的训练记录，最多 limit 条（防止一次拉取过多）。"""
         ...
 
     async def list_between(
@@ -32,6 +37,7 @@ class WorkoutRepository(Protocol):
         user_id: UUID,
         workout_id: UUID,
     ) -> Workout | None:
+        """按 id 读取单条训练；不存在或不属于该用户返回 None。"""
         ...
 
     async def get_feedback(
@@ -40,6 +46,7 @@ class WorkoutRepository(Protocol):
         user_id: UUID,
         workout_id: UUID,
     ) -> WorkoutFeedback | None:
+        """读取某次训练的用户反馈；尚未报告返回 None。"""
         ...
 
     async def list_feedback_for_workouts(

@@ -32,16 +32,17 @@ class JsonFormatter(logging.Formatter):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value
-        if record.exc_info:
+        if record.exc_info:  # 带异常的日志：把完整堆栈格式化进 JSON
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False)
 
 
 def configure_logging() -> None:
+    """装配根 logger：JSON 行输出到 stdout，并压低 uvicorn 访问日志噪音。"""
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
-    root.handlers.clear()
+    root.handlers.clear()  # 清掉默认 handler，避免日志重复输出
     root.addHandler(handler)
     root.setLevel(logging.INFO)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

@@ -17,6 +17,8 @@ from app.memory.ports.evidence_reader import ValidatedEvidence
 
 
 class CanonicalEpisodeDetector:
+    """情节检测器：从证据中识别“疲劳恢复”与“计划调整结果”两类情节。"""
+
     async def detect(
         self,
         *,
@@ -25,6 +27,7 @@ class CanonicalEpisodeDetector:
         ended_at: datetime,
         evidence: tuple[ValidatedEvidence, ...],
     ) -> EpisodeCandidate | None:
+        """按情节类型分派到对应检测器；证据不足时返回 None（不编造情节）。"""
         if type is EpisodeType.PLAN_ADAPTATION_OUTCOME:
             return _plan_adaptation(started_at, ended_at, evidence)
         return _fatigue_and_recovery(started_at, ended_at, evidence)
@@ -35,25 +38,27 @@ def _plan_adaptation(
     ended_at: datetime,
     evidence: tuple[ValidatedEvidence, ...],
 ) -> EpisodeCandidate | None:
+    """计划调整情节：干预=已确认的计划调整，触发=其之前最近的状态/反馈。"""
     plan_change = next(
         (item for item in evidence if item.source_type is EvidenceSourceType.PLAN_CHANGE),
         None,
     )
     if plan_change is None:
-        return None
+        return None  # 没有计划调整就不构成该类情节
     trigger = _latest_before(
         evidence,
         plan_change.source_occurred_at,
         allowed=(EvidenceSourceType.ATHLETE_STATE_SNAPSHOT, EvidenceSourceType.WORKOUT_FEEDBACK),
     )
     if trigger is None:
-        return None
+        return None  # 缺少调整前的状态触发证据
     outcome = _recovery_after(evidence, plan_change.source_occurred_at)
     refs = [
         _episode_ref(trigger, EpisodeEvidenceRole.TRIGGER),
         _episode_ref(plan_change, EpisodeEvidenceRole.INTERVENTION),
     ]
     if outcome is not None:
+        # 找到恢复结果证据：情节直接记为已完成
         refs.append(_episode_ref(outcome, EpisodeEvidenceRole.OUTCOME))
         summary = (
             f"{started_at.date()} 至 {ended_at.date()}：基于跑者状态确认了训练计划调整，"
@@ -80,7 +85,8 @@ def _fatigue_and_recovery(
     ended_at: datetime,
     evidence: tuple[ValidatedEvidence, ...],
 ) -> EpisodeCandidate | None:
-    trigger = next(
+    """疲劳恢复情节：触发=高/中疲劳快照，干预=其后的计划调整（可选）。"""
+    trigger = next(  # 找最早一条高/中疲劳的状态快照作为触发
         (
             item
             for item in sorted(evidence, key=lambda source: source.source_occurred_at)
@@ -90,7 +96,7 @@ def _fatigue_and_recovery(
         None,
     )
     if trigger is None:
-        return None
+        return None  # 没有疲劳触发射点就不构成情节
     intervention = next(
         (
             item
@@ -131,6 +137,7 @@ def _latest_before(
     *,
     allowed: tuple[EvidenceSourceType, ...],
 ) -> ValidatedEvidence | None:
+    """取截止时间前、限定类型中最近的一条证据。"""
     candidates = [
         item
         for item in evidence
@@ -142,6 +149,7 @@ def _latest_before(
 def _recovery_after(
     evidence: tuple[ValidatedEvidence, ...], cutoff: datetime
 ) -> ValidatedEvidence | None:
+    """取截止时间之后第一条“疲劳降低或恢复良好”的状态快照（恢复结果）。"""
     candidates = [
         item
         for item in evidence
@@ -153,6 +161,7 @@ def _recovery_after(
 
 
 def _episode_ref(source: ValidatedEvidence, role: EpisodeEvidenceRole) -> EpisodeEvidenceRef:
+    """把一条已校验证据转成指定角色的情节证据引用。"""
     return EpisodeEvidenceRef(
         source_type=source.source_type,
         source_id=source.source_id,

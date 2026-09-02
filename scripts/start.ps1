@@ -172,8 +172,11 @@ function Assert-PortFree {
 
 function Read-EnvFile {
     param([string] $Path)
+    # 必须显式指定 UTF8：PowerShell 5.1 默认按 ANSI 解码无 BOM 的 .env，
+    # 会把中文注释行的多字节序列解错，进而吞掉紧随其后的配置项。
+    $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8)
     $values = @{}
-    foreach ($line in Get-Content -LiteralPath $Path) {
+    foreach ($line in $lines) {
         $trimmed = $line.Trim()
         if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#')) { continue }
         $separator = $trimmed.IndexOf('=')
@@ -238,14 +241,23 @@ function Invoke-InDirectory {
         [string[]] $Arguments,
         [string] $Label
     )
+    # uv / npm 的进度信息写在 stderr 上。PowerShell 5.1 存在已知问题：当
+    # $ErrorActionPreference='Stop' 时，native 命令的 stderr（尤其是被 2>&1 / 2>file
+    # 重定向时）会被包装成终止性 NativeCommandError。因此调用期间临时降级为 Continue，
+    # 让 stderr 直接透传，仅凭退出码判断成败。
+    $previousPreference = $ErrorActionPreference
     Push-Location -LiteralPath $Directory
     try {
+        $ErrorActionPreference = 'Continue'
         & $Executable @Arguments
-        if ($LASTEXITCODE -ne 0) {
-            Stop-Startup "$Label 失败（退出码 $LASTEXITCODE）。"
+        $exitCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousPreference
+        if ($exitCode -ne 0) {
+            Stop-Startup "$Label 失败（退出码 $exitCode）。"
         }
     }
     finally {
+        $ErrorActionPreference = $previousPreference
         Pop-Location
     }
     Write-Ok $Label

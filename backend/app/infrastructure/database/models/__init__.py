@@ -1,3 +1,5 @@
+"""全部 ORM 模型的统一出口：外部只从这里 import，不感知各模型文件。"""
+
 from app.infrastructure.database.models.agent import (
     AgentRunRow,
     MessageRow,

@@ -10,8 +10,10 @@ from app.infrastructure.database.base import Base
 
 
 class UserRow(Base):
+    """用户账号表。"""
+
     __tablename__ = "users"
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)  # 注册时间
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)  # 最后更新时间

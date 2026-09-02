@@ -42,14 +42,20 @@ class GetWorkoutFeedbackArgs(BaseModel):
 
 
 class GetActiveGoalArgs(BaseModel):
+    """无参数：只读取可信上下文中的用户身份。"""
+
     model_config = ConfigDict(extra="forbid")
 
 
 class GetActivePlanArgs(BaseModel):
+    """无参数：只读取可信上下文中的用户身份与时间。"""
+
     model_config = ConfigDict(extra="forbid")
 
 
 class GetLatestAthleteStateArgs(BaseModel):
+    """无参数：只读取可信上下文中的用户身份。"""
+
     model_config = ConfigDict(extra="forbid")
 
 
@@ -158,6 +164,8 @@ class GetWorkoutFeedbackTool:
 
 
 class GetActiveGoalTool:
+    """读取当前生效的训练目标；无参数只读查询。"""
+
     def __init__(self, *, goal_service: GoalQueryService) -> None:
         self._goals = goal_service
 
@@ -183,6 +191,8 @@ class GetActiveGoalTool:
 
 
 class GetActivePlanTool:
+    """读取当前生效的训练计划摘要与近期课次；无参数只读查询。"""
+
     def __init__(self, *, plan_service: PlanQueryService) -> None:
         self._plans = plan_service
 

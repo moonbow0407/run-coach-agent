@@ -25,6 +25,8 @@ from app.infrastructure.jsonutil import json_ready
 
 
 class SqlAlchemyAgentTraceRecorder:
+    """执行轨迹记录器：Agent 每一步（推理/调用/观察/终答）落一行轨迹。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession], clock: Clock) -> None:
         self._sessions = sessions
         self._clock = clock
@@ -112,6 +114,7 @@ class SqlAlchemyAgentTraceRecorder:
         started_at: datetime,
         completed_at: datetime | None,
     ) -> None:
+        """独立短事务写入一条轨迹；index 取当前最大值 + 1 保证顺序。"""
         async with short_session(self._sessions, commit=True) as session:
             current = await session.scalar(
                 select(func.max(RunStepRow.index)).where(RunStepRow.run_id == run_id)

@@ -25,10 +25,12 @@ from app.workers.routing import route_event
 async def test_recompute_handler_dead_letters_cross_user_source(
     make_app, sessions, user_id, clock
 ) -> None:
+    """验证：事件声明的 user 与 canonical source 真实归属不一致时，消费端 dead letter 拒绝处理。"""
     other_user_id = new_id()
     async with short_session(sessions, commit=True) as session:
         session.add(UserRow(id=other_user_id, created_at=clock.now(), updated_at=clock.now()))
     app = make_app()
+    # 课次真实归属于 other_user，但事件却以 user_id 的名义发出——构造跨用户伪造场景。
     workout = await app.state.workout_command_service.record(
         user_id=other_user_id,
         mutation=WorkoutMutation(
@@ -66,5 +68,6 @@ async def test_recompute_handler_dead_letters_cross_user_source(
         worker_id="source-owner-test",
     )
     result = await runner.consume(route_event(event, enqueued_at=clock.now())[0])
+    # 归属校验失败必须走死信而不是静默丢弃或照常处理。
     assert result.status == "dead_lettered"
 

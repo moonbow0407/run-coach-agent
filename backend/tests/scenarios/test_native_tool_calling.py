@@ -20,6 +20,7 @@ class FakeNativeProvider:
 
     def __init__(self, responses: list[ModelResponse]) -> None:
         self._responses = list(responses)
+        # 记录收到的每次模型请求，供断言检查实际下发的 Schema 与消息。
         self.requests: list[ModelRequest] = []
 
     async def generate(self, request: ModelRequest) -> ModelResponse:
@@ -30,6 +31,7 @@ class FakeNativeProvider:
 
 
 def _tool_call_response(call_id: str, tool: str, arguments: dict) -> ModelResponse:
+    """构造一次「模型要求调用工具」的 native 响应。"""
     return ModelResponse(
         text="",
         model="fake-native",
@@ -38,6 +40,7 @@ def _tool_call_response(call_id: str, tool: str, arguments: dict) -> ModelRespon
 
 
 def _final_response(content: str) -> ModelResponse:
+    """构造一次「模型给出最终文本回复」的 native 响应。"""
     return ModelResponse(text=content, model="fake-native")
 
 

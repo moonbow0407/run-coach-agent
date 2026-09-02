@@ -9,4 +9,5 @@ class StalePlanChangeError(ConflictError):
 
     def __init__(self, plan_change: PlanChange) -> None:
         super().__init__("stale", code="stale")
+        # 携带已标 STALE 的提案，供调用方做幂等返回或向用户解释冲突原因。
         self.plan_change = plan_change

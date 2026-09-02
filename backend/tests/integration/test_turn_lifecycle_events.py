@@ -1,3 +1,5 @@
+"""Turn 生命周期事件契约：TurnCommitted 只在提交成功后发布，失败/提交崩溃/监听器异常各有边界。"""
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -18,6 +20,7 @@ async def test_turn_committed_is_published_only_after_commit(
     sessions,
     clock: FrozenClock,
 ) -> None:
+    """验证：TurnCommitStarted 先于 TurnCommitted 发布，事件与落库的 Turn 状态、助手消息一致。"""
     reasoner = ScriptedReasoner([FinalAction(content="好的。")])
     app = make_app(reasoner=reasoner)
     events = record_events(app.state.lifecycle)
@@ -32,6 +35,7 @@ async def test_turn_committed_is_published_only_after_commit(
     types = event_types(events)
     assert types[0] == "TurnStarted"
     assert types[-1] == "TurnCommitted"
+    # 顺序约束：必须先"开始提交"，提交成功后才有"已提交"事件。
     commit_index = types.index("TurnCommitStarted")
     committed_index = types.index("TurnCommitted")
     assert commit_index < committed_index
@@ -51,6 +55,7 @@ async def test_failed_turn_never_publishes_turn_committed(
     auth_header,
     sessions,
 ) -> None:
+    """验证：推理失败的 Turn 只发 TurnFailed，绝不出现 TurnCommitted；用户消息保留、无助手消息。"""
     app = make_app(reasoner=FailingReasoner())
     events = record_events(app.state.lifecycle)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -78,12 +83,14 @@ async def test_commit_failure_marks_turn_failed(
     sessions,
     monkeypatch,
 ) -> None:
+    """验证：提交阶段抛错时 Turn 落为 FAILED 且不发 TurnCommitted——终态事件与事务结果绑定。"""
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="不会提交")]))
     events = record_events(app.state.lifecycle)
 
     async def fail_commit(**_kwargs):
         raise InfrastructureError("提交失败")
 
+    # monkeypatch：临时把 commit_turn 换成必抛错版本，模拟提交崩溃。
     monkeypatch.setattr(app.state.conversation_store, "commit_turn", fail_commit)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -106,9 +113,11 @@ async def test_turn_committed_listener_failure_does_not_change_success(
     auth_header,
     sessions,
 ) -> None:
+    """验证：TurnCommitted 之后监听器崩溃不影响已成功的响应与落库——提交后阶段不是失败回滚区。"""
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="已经提交")]))
     events = record_events(app.state.lifecycle)
 
+    # 恶意监听器：只在收到 TurnCommitted 时抛错，模拟提交后投影方故障。
     def broken_projector(event) -> None:
         if isinstance(event, TurnCommitted):
             raise OSError("projector unavailable")

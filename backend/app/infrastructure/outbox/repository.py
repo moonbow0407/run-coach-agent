@@ -16,39 +16,51 @@ from app.infrastructure.database.session import short_session
 
 @dataclass(frozen=True)
 class ClaimedOutboxEvent:
-    event: DurableEventEnvelope | None
+    """被投递进程认领的一条 outbox 事件快照。"""
+
+    event: DurableEventEnvelope | None  # 解码后的事件；载荷损坏时为 None
     event_id: UUID
     event_type: str
     user_id: UUID
-    publish_attempt: int
-    decode_error: str | None = None
+    publish_attempt: int  # 本次是第几次投递尝试
+    decode_error: str | None = None  # 事件解码失败时的错误码
 
 
 class ConsumptionClaim(StrEnum):
-    ACQUIRED = "acquired"
-    COMPLETED = "completed"
-    BUSY = "busy"
-    DEAD_LETTERED = "dead_lettered"
+    """消费认领的四种结果。"""
+
+    ACQUIRED = "acquired"  # 成功认领，可以处理
+    COMPLETED = "completed"  # 已处理完成（幂等去重命中）
+    BUSY = "busy"  # 其他实例持有未过期租约
+    DEAD_LETTERED = "dead_lettered"  # 已进入死信，不再处理
 
 
 @dataclass(frozen=True)
 class ConsumptionClaimResult:
+    """认领结果：结果类型 + 累计尝试次数。"""
+
     outcome: ConsumptionClaim
     attempt: int
 
 
 class ConsumptionFailure(StrEnum):
-    RETRY = "retry"
-    DEAD_LETTERED = "dead_lettered"
+    """消费失败后的两种去向。"""
+
+    RETRY = "retry"  # 可重试，租约释放后再次认领
+    DEAD_LETTERED = "dead_lettered"  # 超过重试上限，转入死信
 
 
 @dataclass(frozen=True)
 class ConsumptionFailureResult:
+    """失败处理结果：去向 + 累计尝试次数。"""
+
     outcome: ConsumptionFailure
     attempt: int
 
 
 class SqlAlchemyOutboxRepository:
+    """outbox 仓储：投递进程认领/发布/重试/隔离的实现。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
@@ -60,32 +72,34 @@ class SqlAlchemyOutboxRepository:
         lease: timedelta,
         limit: int,
     ) -> tuple[ClaimedOutboxEvent, ...]:
+        """认领一批可投递事件：加租约防止多个投递进程重复投递。"""
         async with short_session(self._sessions, commit=True) as session:
             rows = (
                 await session.scalars(
                     select(OutboxEventRow)
                     .where(
                         OutboxEventRow.status == "pending",
-                        OutboxEventRow.available_at <= now,
+                        OutboxEventRow.available_at <= now,  # 已到可投递时间
                         (
                             OutboxEventRow.claim_until.is_(None)
                             | (OutboxEventRow.claim_until <= now)
-                        ),
+                        ),  # 未被认领，或旧租约已到期
                     )
                     .order_by(OutboxEventRow.created_at.asc(), OutboxEventRow.event_id.asc())
-                    .with_for_update(skip_locked=True)
+                    .with_for_update(skip_locked=True)  # 已被其他事务锁定的行直接跳过
                     .limit(limit)
                 )
             ).all()
             claimed: list[ClaimedOutboxEvent] = []
             for row in rows:
-                row.claimed_by = worker_id
+                row.claimed_by = worker_id  # 写入租约：投递窗口内归本进程所有
                 row.claim_until = now + lease
                 row.publish_attempt_count += 1
                 try:
                     event = _event_from_row(row)
                     decode_error = None
                 except (DomainError, TypeError, ValueError, AttributeError, KeyError):
+                    # 载荷损坏也照常认领，交由上层隔离，避免卡住队列
                     event = None
                     decode_error = "malformed_outbox_event"
                 claimed.append(
@@ -104,6 +118,7 @@ class SqlAlchemyOutboxRepository:
     async def mark_published(
         self, *, event_id: UUID, worker_id: str, published_at: datetime
     ) -> None:
+        """投递成功：标记 published 并清空租约。"""
         async with short_session(self._sessions, commit=True) as session:
             row = await self._require_claim(session, event_id=event_id, worker_id=worker_id)
             row.status = "published"
@@ -120,6 +135,7 @@ class SqlAlchemyOutboxRepository:
         available_at: datetime,
         error_code: str,
     ) -> None:
+        """投递失败但可重试：推迟到 available_at 再投，释放租约。"""
         async with short_session(self._sessions, commit=True) as session:
             row = await self._require_claim(session, event_id=event_id, worker_id=worker_id)
             row.available_at = available_at
@@ -135,6 +151,7 @@ class SqlAlchemyOutboxRepository:
         quarantined_at: datetime,
         error_code: str,
     ) -> None:
+        """投递彻底失败：转入隔离区停止投递，等待人工处理。"""
         async with short_session(self._sessions, commit=True) as session:
             row = await self._require_claim(session, event_id=event_id, worker_id=worker_id)
             row.status = "quarantined"
@@ -144,6 +161,7 @@ class SqlAlchemyOutboxRepository:
             row.claim_until = None
 
     async def get(self, *, event_id: UUID) -> DurableEventEnvelope | None:
+        """按事件 ID 读取单个事件信封。"""
         async with short_session(self._sessions) as session:
             row = await session.scalar(
                 select(OutboxEventRow).where(OutboxEventRow.event_id == event_id)
@@ -153,6 +171,7 @@ class SqlAlchemyOutboxRepository:
     async def list_published_before(
         self, *, cutoff: datetime, limit: int
     ) -> tuple[DurableEventEnvelope, ...]:
+        """列出某时间点前已发布的事件（供归档/清理类任务使用）。"""
         async with short_session(self._sessions) as session:
             rows = (
                 await session.scalars(
@@ -176,6 +195,7 @@ class SqlAlchemyOutboxRepository:
         cutoff: datetime,
         limit: int,
     ) -> tuple[DurableEventEnvelope, ...]:
+        """找出已发布但指定消费者尚无终态回执（completed/dead_lettered）的事件。"""
         terminal_receipt = (
             select(EventConsumptionRow.event_id)
             .where(
@@ -208,17 +228,20 @@ class SqlAlchemyOutboxRepository:
     async def _require_claim(
         self, session: AsyncSession, *, event_id: UUID, worker_id: str
     ) -> OutboxEventRow:
+        """校验事件仍处于 pending 且租约归本进程；否则视为租约丢失。"""
         row = await session.scalar(
             select(OutboxEventRow).where(OutboxEventRow.event_id == event_id).with_for_update()
         )
         if row is None:
             raise NotFoundError("outbox_event_not_found")
         if row.status != "pending" or row.claimed_by != worker_id:
-            raise ConflictError("outbox_claim_lost")
+            raise ConflictError("outbox_claim_lost")  # 租约过期后被他人接管
         return row
 
 
 class SqlAlchemyConsumptionRepository:
+    """consumer receipt 仓储：消费端幂等认领与处理结果记录。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
@@ -233,13 +256,15 @@ class SqlAlchemyConsumptionRepository:
         now: datetime,
         lease: timedelta,
     ) -> ConsumptionClaimResult:
+        """幂等认领事件：首次创建回执，重复消费按回执状态直接短路。"""
         async with short_session(self._sessions, commit=True) as session:
             row = await session.get(
                 EventConsumptionRow,
                 (consumer_name, consumer_version, event_id),
-                with_for_update=True,
+                with_for_update=True,  # 锁定回试行，防止并发重复认领
             )
             if row is None:
+                # 该事件对该消费者是首次处理：建回执并占用租约
                 session.add(
                     EventConsumptionRow(
                         consumer_name=consumer_name,
@@ -259,12 +284,13 @@ class SqlAlchemyConsumptionRepository:
             if row.user_id != user_id:
                 raise ConflictError("event_consumption_user_mismatch")
             if row.status == "completed":
+                # 已处理完成：幂等去重命中，不再执行
                 return ConsumptionClaimResult(ConsumptionClaim.COMPLETED, row.attempt_count)
             if row.status == "dead_lettered":
                 return ConsumptionClaimResult(ConsumptionClaim.DEAD_LETTERED, row.attempt_count)
             if row.lease_until is not None and row.lease_until > now:
-                return ConsumptionClaimResult(ConsumptionClaim.BUSY, row.attempt_count)
-            row.attempt_count += 1
+                return ConsumptionClaimResult(ConsumptionClaim.BUSY, row.attempt_count)  # 其他实例正在处理
+            row.attempt_count += 1  # 租约已过期：重新认领继续重试
             row.lease_owner = worker_id
             row.lease_until = now + lease
             row.last_error_code = None
@@ -279,6 +305,7 @@ class SqlAlchemyConsumptionRepository:
         worker_id: str,
         completed_at: datetime,
     ) -> None:
+        """处理成功：回执置为 completed，释放租约。"""
         async with short_session(self._sessions, commit=True) as session:
             row = await self._require_owned(
                 session,
@@ -305,6 +332,7 @@ class SqlAlchemyConsumptionRepository:
         retryable: bool,
         max_attempts: int,
     ) -> ConsumptionFailureResult:
+        """处理失败：未超重试上限则安排重试，否则转入死信。"""
         async with short_session(self._sessions, commit=True) as session:
             row = await self._require_owned(
                 session,
@@ -317,11 +345,12 @@ class SqlAlchemyConsumptionRepository:
             row.lease_owner = None
             row.lease_until = None
             if retryable and row.attempt_count < max_attempts:
+                # 还有重试额度：只记错误，不改状态，等下次认领
                 return ConsumptionFailureResult(
                     outcome=ConsumptionFailure.RETRY,
                     attempt=row.attempt_count,
                 )
-            row.status = "dead_lettered"
+            row.status = "dead_lettered"  # 不可重试或重试耗尽：进入死信
             row.completed_at = failed_at
             return ConsumptionFailureResult(
                 outcome=ConsumptionFailure.DEAD_LETTERED,
@@ -331,6 +360,7 @@ class SqlAlchemyConsumptionRepository:
     async def is_terminal(
         self, *, consumer_name: str, consumer_version: int, event_id: UUID
     ) -> bool:
+        """该事件对该消费者是否已有终态结果（完成或死信）。"""
         async with short_session(self._sessions) as session:
             row = await session.get(
                 EventConsumptionRow,
@@ -345,6 +375,7 @@ class SqlAlchemyConsumptionRepository:
         consumer_version: int,
         event_id: UUID,
     ) -> None:
+        """人工重放：仅允许把死信事件重置回 processing 重新处理。"""
         async with short_session(self._sessions, commit=True) as session:
             row = await session.get(
                 EventConsumptionRow,
@@ -370,6 +401,7 @@ class SqlAlchemyConsumptionRepository:
         event_id: UUID,
         worker_id: str,
     ) -> EventConsumptionRow:
+        """校验回执存在且租约归本进程；否则视为租约丢失。"""
         row = await session.get(
             EventConsumptionRow,
             (consumer_name, consumer_version, event_id),
@@ -383,6 +415,7 @@ class SqlAlchemyConsumptionRepository:
 
 
 def _event_from_row(row: OutboxEventRow) -> DurableEventEnvelope:
+    """outbox Row -> 事件信封（含 correlation/causation/trace 元数据）。"""
     return DurableEventEnvelope(
         event_id=row.event_id,
         event_type=row.event_type,

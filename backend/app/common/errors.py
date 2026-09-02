@@ -23,11 +23,12 @@ class ApplicationError(RunCoachError):
 
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
+        # 错误码用于 API 边界映射响应；未显式指定时复用 message 作稳定错误名。
         self.code = code if code is not None else message
 
 
 class NotFoundError(ApplicationError):
-    pass
+    """请求的资源不存在。"""
 
 
 class ConflictError(ApplicationError):
@@ -35,11 +36,11 @@ class ConflictError(ApplicationError):
 
 
 class ForbiddenError(ApplicationError):
-    pass
+    """身份已认证，但无权访问该资源。"""
 
 
 class AuthenticationError(ApplicationError):
-    pass
+    """未通过认证或凭证无效。"""
 
 
 class AgentRuntimeError(RunCoachError):

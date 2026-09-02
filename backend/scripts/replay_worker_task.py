@@ -20,6 +20,7 @@ from app.workers.replay import WorkerTaskReplayer
 
 
 def _arguments() -> argparse.Namespace:
+    """解析命令行参数：事件 ID + 消费者名称与版本（重放三元组）。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event-id", required=True, type=UUID)
     parser.add_argument("--consumer-name", required=True)
@@ -28,6 +29,7 @@ def _arguments() -> argparse.Namespace:
 
 
 async def main() -> None:
+    """连接数据库与 Redis，执行一次人工重放，并以 JSON 打印结果。"""
     args = _arguments()
     settings = Settings()
     engine = create_engine(settings.database_url)
@@ -46,6 +48,7 @@ async def main() -> None:
         )
         print(json.dumps(asdict(result), default=str, ensure_ascii=False))
     finally:
+        # 无论成败都释放 Redis 连接与数据库引擎。
         await redis.aclose()
         await engine.dispose()
 

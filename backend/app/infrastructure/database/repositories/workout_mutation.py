@@ -27,6 +27,8 @@ from app.infrastructure.outbox.writer import OutboxWriter
 
 
 class SqlAlchemyWorkoutMutationStore:
+    """训练事实变更仓储：写入/更新 Workout 与 Feedback，并同事务写 outbox 事件。"""
+
     def __init__(
         self,
         sessions: async_sessionmaker[AsyncSession],
@@ -44,6 +46,7 @@ class SqlAlchemyWorkoutMutationStore:
         available_at: datetime,
         event_metadata: EventMetadata,
     ) -> Workout:
+        """新增一条训练记录，同事务写 workout.changed(RECORDED) 事件。"""
         async with short_session(self._sessions, commit=True) as session:
             row = WorkoutRow(
                 id=workout_id,
@@ -78,8 +81,9 @@ class SqlAlchemyWorkoutMutationStore:
         available_at: datetime,
         event_metadata: EventMetadata,
     ) -> Workout:
+        """整条更新训练记录（行锁防并发丢更新），同事务写 UPDATED 事件。"""
         async with short_session(self._sessions, commit=True) as session:
-            row = await session.scalar(
+            row = await session.scalar(  # FOR UPDATE 行锁：更新期间禁止并发改动
                 select(WorkoutRow)
                 .where(WorkoutRow.id == workout_id, WorkoutRow.user_id == user_id)
                 .with_for_update()
@@ -114,6 +118,7 @@ class SqlAlchemyWorkoutMutationStore:
         available_at: datetime,
         event_metadata: EventMetadata,
     ) -> WorkoutFeedback:
+        """为某次训练新增主观反馈，同事务写 feedback.changed(RECORDED) 事件。"""
         async with short_session(self._sessions, commit=True) as session:
             workout = await self._require_workout(
                 session,
@@ -152,6 +157,7 @@ class SqlAlchemyWorkoutMutationStore:
         available_at: datetime,
         event_metadata: EventMetadata,
     ) -> WorkoutFeedback:
+        """更新既有反馈（行锁防并发丢更新），同事务写 UPDATED 事件。"""
         async with short_session(self._sessions, commit=True) as session:
             row = await session.scalar(
                 select(WorkoutFeedbackRow)
@@ -191,6 +197,7 @@ class SqlAlchemyWorkoutMutationStore:
         user_id: UUID,
         workout_id: UUID,
     ) -> WorkoutRow:
+        """校验训练存在且归属本用户，否则按未找到处理。"""
         row = await session.scalar(
             select(WorkoutRow).where(
                 WorkoutRow.id == workout_id,
@@ -210,6 +217,7 @@ class SqlAlchemyWorkoutMutationStore:
         available_at: datetime,
         event_metadata: EventMetadata,
     ) -> None:
+        """向 outbox 写训练变更事件（与业务数据同事务提交）。"""
         self._outbox.add(
             session,
             new_workout_changed_event(
@@ -234,6 +242,7 @@ class SqlAlchemyWorkoutMutationStore:
         available_at: datetime,
         event_metadata: EventMetadata,
     ) -> None:
+        """向 outbox 写反馈变更事件；source_fact_at 指向所属训练开始时间。"""
         self._outbox.add(
             session,
             new_workout_feedback_changed_event(

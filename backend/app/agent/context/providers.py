@@ -30,11 +30,16 @@ from app.coaching.domain.athlete.models import AthleteStateSnapshot
 from app.coaching.domain.goal.models import TrainingGoal
 
 
+# 三个 Provider Protocol：只约束方法签名，实现方无需显式继承
 class WorkingContextProvider(Protocol):
+    """热上下文数据源接口：当前目标 / 生效计划 / 最新跑者状态。"""
+
     async def load(self, *, user_id: UUID, as_of: datetime) -> WorkingContext: ...
 
 
 class ConversationContextProvider(Protocol):
+    """历史对话数据源接口：本线程已提交 Turn 的消息（排除当前轮）。"""
+
     async def load(
         self,
         *,
@@ -46,6 +51,8 @@ class ConversationContextProvider(Protocol):
 
 
 class MemoryContextProvider(Protocol):
+    """长期记忆数据源接口：返回（语义记忆, 情节记忆）两组检索结果。"""
+
     async def load(
         self,
         *,
@@ -56,6 +63,7 @@ class MemoryContextProvider(Protocol):
 
 
 class DomainWorkingContextProvider:
+    """生产实现：调用 coaching 域的查询服务组装热上下文。"""
     def __init__(
         self,
         goal_service: GoalQueryService,
@@ -67,6 +75,7 @@ class DomainWorkingContextProvider:
         self._athlete = athlete_service
 
     async def load(self, *, user_id: UUID, as_of: datetime) -> WorkingContext:
+        # 三类信息独立查询：新用户可能目标 / 计划 / 状态尚不存在，对应视图为 None
         goal = await self._goals.get_active_goal(user_id=user_id)
         plan = await self._plans.get_active_plan_summary(user_id=user_id, as_of=as_of)
         state = await self._athlete.get_latest_athlete_state(user_id=user_id)
@@ -79,6 +88,8 @@ class DomainWorkingContextProvider:
 
 
 class SqlConversationContextProvider:
+    """生产实现：通过 ConversationReader 读取已提交历史消息。"""
+
     def __init__(self, reader: ConversationReader) -> None:
         self._reader = reader
 
@@ -113,6 +124,7 @@ class NullMemoryContextProvider:
 
 
 def _goal_view(goal: TrainingGoal) -> GoalView:
+    """领域对象 → 上下文视图的字段映射。"""
     return GoalView(
         id=goal.id,
         goal_type=goal.goal_type.value,
@@ -124,6 +136,7 @@ def _goal_view(goal: TrainingGoal) -> GoalView:
 
 
 def _plan_summary(summary: ActivePlanSummary) -> PlanSummary:
+    """计划领域摘要 → 上下文计划摘要视图。"""
     return PlanSummary(
         id=summary.plan.id,
         version=summary.plan.version,
@@ -146,6 +159,7 @@ def _plan_summary(summary: ActivePlanSummary) -> PlanSummary:
 
 
 def _state_view(snapshot: AthleteStateSnapshot) -> AthleteStateView:
+    """跑者状态快照 → 上下文状态视图。"""
     return AthleteStateView(
         version=snapshot.version,
         as_of=snapshot.as_of,

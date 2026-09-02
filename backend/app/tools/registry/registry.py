@@ -84,9 +84,11 @@ class ToolRegistry:
         del self._tools[name]
 
     def find(self, name: str) -> RegisteredTool | None:
+        """按名称查找注册条目；不存在返回 None（存在性判断入口）。"""
         return self._tools.get(name)
 
     def always_on_names(self) -> frozenset[str]:
+        """所有免发现即可见的工具名：Resolver 计算可见集合的基础。"""
         return frozenset(
             name
             for name, entry in self._tools.items()

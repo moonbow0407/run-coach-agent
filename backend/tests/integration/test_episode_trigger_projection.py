@@ -32,6 +32,7 @@ async def test_state_triggers_complete_same_fatigue_episode(
     test_settings,
     clock,
 ) -> None:
+    """验证：风险与恢复两次状态快照触发投影进同一疲劳 episode；同一触发重放幂等，不重复记证据。"""
     risk_at = clock.now()
     recovery_at = risk_at + timedelta(days=7)
     risk_id = new_id()
@@ -39,6 +40,7 @@ async def test_state_triggers_complete_same_fatigue_episode(
     async with short_session(sessions, commit=True) as session:
         session.add(_snapshot(risk_id, user_id, 1, risk_at, "high", "poor"))
 
+    # FixedEmbeddingProvider：固定向量桩（复用自记忆垂直切片测试），保证检索结果可断言。
     first_app = create_app(
         test_settings,
         reasoner=ScriptedReasoner([]),
@@ -47,6 +49,7 @@ async def test_state_triggers_complete_same_fatigue_episode(
         embedding_provider=FixedEmbeddingProvider(),
     )
     second_app = None
+    # 每个时间点单独建 app（时钟冻结在不同时刻），模拟跨天到达的两个触发。
     try:
         first_results = await first_app.state.episode_projection_service.project_trigger(
             user_id=user_id,
@@ -86,10 +89,12 @@ async def test_state_triggers_complete_same_fatigue_episode(
                 select(func.count()).select_from(EpisodeEvidenceRow)
             )
         assert episode is not None
+        # 两个触发共享同一 logical_key（锚定在首个触发），证据补齐至 2 条且 episode completed。
         assert episode.status == "completed"
         assert episode.logical_key == f"fatigue_trigger:{risk_id}"
         assert evidence_count == 2
     finally:
+        # teardown：显式释放连接池，避免 NullPool 引擎跨用例残留。
         await first_app.state.engine.dispose()
         if second_app is not None:
             await second_app.state.engine.dispose()
@@ -101,6 +106,7 @@ async def test_confirmed_plan_and_recovery_state_complete_two_stable_episodes(
     test_settings,
     clock,
 ) -> None:
+    """验证：计划确认与恢复快照各自开一个 building episode，恢复事件到达后两集均原地补证据并 completed。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     app = create_app(
@@ -137,6 +143,7 @@ async def test_confirmed_plan_and_recovery_state_complete_two_stable_episodes(
             event_metadata=EventMetadata(correlation_id=new_id(), trace_id=new_id()),
         )
         await drain_durable_tasks(app)
+        # 此时计划提案已确认、恢复快照未到：应有两个 building 中的 episode。
         async with short_session(sessions) as session:
             building = list(
                 (
@@ -150,6 +157,7 @@ async def test_confirmed_plan_and_recovery_state_complete_two_stable_episodes(
 
         recovery_at = clock.now() + timedelta(days=7)
         recovery_id = new_id()
+        # 手工补一条 7 天后的恢复快照及其 durable 事件，再由新 app 消费。
         recovery = _snapshot(
             recovery_id,
             seed.user_id,
@@ -215,6 +223,7 @@ def _snapshot(
     fatigue,
     recovery,
 ) -> AthleteStateSnapshotRow:
+    """构造一条状态快照行：fatigue/recovery 由参数指定，其余指标取固定可信值。"""
     return AthleteStateSnapshotRow(
         id=snapshot_id,
         user_id=user_id,

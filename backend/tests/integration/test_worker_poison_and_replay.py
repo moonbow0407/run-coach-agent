@@ -25,6 +25,8 @@ from app.workers.routing import FINALIZE_TERMINAL_TURN
 
 
 class _Queue:
+    """桩队列：记录所有 enqueue 的任务，供断言投递内容与数量。"""
+
     def __init__(self) -> None:
         self.tasks = []
 
@@ -36,6 +38,7 @@ class _Queue:
 async def test_malformed_pending_outbox_is_quarantined_without_blocking_valid_row(
     sessions, user_id, clock
 ) -> None:
+    """验证：同批 pending 行中畸形行被隔离、合法行正常投递——毒行不阻塞批次。"""
     event = new_turn_terminal_event(
         event_type=TURN_FAILED_V1,
         user_id=user_id,
@@ -43,6 +46,7 @@ async def test_malformed_pending_outbox_is_quarantined_without_blocking_valid_ro
         metadata=EventMetadata(correlation_id=new_id()),
     )
     poison_id = new_id()
+    # 合法事件走 OutboxWriter；毒行手工插入（payload 缺协议必需字段）。
     async with sessions.begin() as session:
         OutboxWriter().add(session, event)
         session.add(
@@ -78,6 +82,7 @@ async def test_malformed_pending_outbox_is_quarantined_without_blocking_valid_ro
         worker_id="poison-test",
     ).publish_batch()
     assert result.quarantined == 1
+    # 一隔离一投递：毒行不拖累同批合法事件。
     assert result.published == 1
     async with sessions() as session:
         row = await session.scalar(select(OutboxEventRow).where(OutboxEventRow.event_id == poison_id))
@@ -89,12 +94,14 @@ async def test_malformed_pending_outbox_is_quarantined_without_blocking_valid_ro
 async def test_dead_letter_replay_requires_exact_route_and_preserves_event_identity(
     sessions, user_id, clock
 ) -> None:
+    """验证：人工重放必须指定与原消费一致的 route（否则 ConflictError）；重放保留原事件身份。"""
     event = new_turn_terminal_event(
         event_type=TURN_FAILED_V1,
         user_id=user_id,
         payload=TurnTerminalV1(new_id(), new_id(), new_id(), clock.now()),
         metadata=EventMetadata(correlation_id=new_id()),
     )
+    # 手工插入一条重试耗尽（attempt=8）的死信回执，模拟真实失败消费。
     async with sessions.begin() as session:
         OutboxWriter().add(session, event)
         session.add(
@@ -119,6 +126,7 @@ async def test_dead_letter_replay_requires_exact_route_and_preserves_event_ident
         queue=queue,
         clock=clock,
     )
+    # 错误 route（project_episode）必须被拒：重放目标与死信回执的消费方不匹配。
     with pytest.raises(ConflictError, match="worker_route_mismatch"): 
         await replayer.replay(
             event_id=event.event_id,

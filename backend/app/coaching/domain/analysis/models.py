@@ -21,18 +21,18 @@ QUALITY_WORKOUT_TYPES = frozenset(
 class TrainingLoadWindow:
     """一个固定时间窗的训练量与 sRPE 覆盖情况。"""
 
-    start: datetime
-    end: datetime
-    workout_count: int
-    total_duration_s: int
-    total_distance_m: float
-    quality_session_count: int
-    srpe_load_sum: float | None
-    partial_srpe_load: float | None
-    srpe_eligible_count: int
-    srpe_available_count: int
-    srpe_coverage: float | None
-    is_partial: bool
+    start: datetime  # 窗口起点（含）
+    end: datetime  # 窗口终点（含）
+    workout_count: int  # 窗口内训练课次总数
+    total_duration_s: int  # 有时长记录课次的时长合计（秒）
+    total_distance_m: float  # 有距离记录课次的距离合计（米）
+    quality_session_count: int  # 质量课（节奏 / 间歇 / 比赛）数量
+    srpe_load_sum: float | None  # 覆盖完整时的 sRPE 负荷合计；否则 None
+    partial_srpe_load: float | None  # 覆盖不完整时的部分负荷合计；完整时为 None
+    srpe_eligible_count: int  # 有负荷计算资格的课次（有时长记录）
+    srpe_available_count: int  # 真正算出负荷的课次（时长 + RPE 齐备）
+    srpe_coverage: float | None  # 覆盖率 = available / eligible；无资格课次为 None
+    is_partial: bool  # 是否存在部分覆盖（0 < 覆盖率 < 1）
 
     def usable_srpe_load(self) -> float | None:
         """coverage >= 门槛时返回窗口 sRPE 合计；否则 None。"""
@@ -47,19 +47,19 @@ class TrainingLoadWindow:
 class TrainingLoadAnalysis:
     """当前 7 日窗与前一个 7 日窗的确定性训练负荷分析。"""
 
-    as_of: datetime
-    current: TrainingLoadWindow
-    previous: TrainingLoadWindow
-    load_change_ratio: float | None
-    load_change_unavailable_reason: str | None
+    as_of: datetime  # 分析基准时间：窗口切分与"排除未来证据"的锚点
+    current: TrainingLoadWindow  # 最近 7 日窗
+    previous: TrainingLoadWindow  # 之前的 7 日窗（对照组）
+    load_change_ratio: float | None  # 当前窗 / 前窗可用负荷之比；不可比时为 None
+    load_change_unavailable_reason: str | None  # 比值不可用的机器可读原因码
 
 
 @dataclass(frozen=True)
 class WorkoutAnalysis:
     """单次训练的确定性分析。same_day_planned_sessions 只是同日计划上下文。"""
 
-    workout: Workout
-    feedback: WorkoutFeedback | None
-    session_rpe_load: float | None
-    quality_session: bool
-    same_day_planned_sessions: tuple[PlannedSession, ...]
+    workout: Workout  # 被分析的训练记录
+    feedback: WorkoutFeedback | None  # as_of 时点最新一条用户反馈
+    session_rpe_load: float | None  # 该课的 sRPE 负荷；缺时长或 RPE 为 None
+    quality_session: bool  # 是否质量课（节奏 / 间歇 / 比赛）
+    same_day_planned_sessions: tuple[PlannedSession, ...]  # 同日计划课次，仅上下文

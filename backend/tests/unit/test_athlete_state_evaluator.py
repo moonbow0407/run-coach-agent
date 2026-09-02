@@ -12,6 +12,7 @@ AS_OF = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 
 
 def _evaluate(workouts, feedbacks):
+    """把训练+反馈喂给负荷分析，再用评估器产出运动员状态评估结果。"""
     analysis = analyze_training_load(
         as_of=AS_OF,
         workouts=workouts,
@@ -28,6 +29,7 @@ def _evaluate(workouts, feedbacks):
 
 
 def test_high_fatigue_from_fatigue_8() -> None:
+    """验证：主观疲劳达 8 直接判定高疲劳，恢复为差。"""
     workout = make_workout(
         started_at=AS_OF - timedelta(hours=10), workout_type=WorkoutType.EASY
     )
@@ -40,6 +42,7 @@ def test_high_fatigue_from_fatigue_8() -> None:
 
 
 def test_high_fatigue_from_fatigue_7_and_soreness_6() -> None:
+    """验证：疲劳 7 叠加酸痛 6 同样构成高疲劳，恢复为一般。"""
     workout = make_workout(
         started_at=AS_OF - timedelta(hours=10), workout_type=WorkoutType.EASY
     )
@@ -52,6 +55,7 @@ def test_high_fatigue_from_fatigue_7_and_soreness_6() -> None:
 
 
 def test_high_fatigue_from_fatigue_7_on_interval() -> None:
+    """验证：高强度课型（间歇）上疲劳 7 即可触发高疲劳。"""
     workout = make_workout(
         started_at=AS_OF - timedelta(hours=10), workout_type=WorkoutType.INTERVAL
     )
@@ -63,6 +67,7 @@ def test_high_fatigue_from_fatigue_7_on_interval() -> None:
 
 
 def test_high_rpe_alone_is_hard_session_not_high_fatigue() -> None:
+    """验证：单次 sRPE 高只算 hard_session 信号，不等同于高疲劳。"""
     workout = make_workout(
         started_at=AS_OF - timedelta(hours=10), workout_type=WorkoutType.EASY
     )
@@ -71,11 +76,13 @@ def test_high_rpe_alone_is_hard_session_not_high_fatigue() -> None:
     )
     assessment = _evaluate([workout], [feedback])
     assert assessment.fatigue_level is FatigueLevel.LOW
+    # 硬课应作为独立信号提示，而非直接拉高疲劳等级
     assert any(signal.code == "hard_session" for signal in assessment.signals)
     assert assessment.fatigue_level is not FatigueLevel.HIGH
 
 
 def test_moderate_fatigue() -> None:
+    """验证：疲劳 6 / 酸痛 4 落入中等疲劳、恢复一般。"""
     workout = make_workout(started_at=AS_OF - timedelta(hours=10))
     feedback = make_feedback(
         workout_id=workout.id, subjective_fatigue=6, soreness=4, perceived_exertion=5
@@ -86,6 +93,7 @@ def test_moderate_fatigue() -> None:
 
 
 def test_low_fatigue_and_good_recovery_without_recent_quality() -> None:
+    """验证：无近期质量课且主观负荷低时判定低疲劳、恢复良好。"""
     workout = make_workout(
         started_at=AS_OF - timedelta(hours=30), workout_type=WorkoutType.EASY
     )
@@ -98,6 +106,7 @@ def test_low_fatigue_and_good_recovery_without_recent_quality() -> None:
 
 
 def test_unknown_when_no_feedback() -> None:
+    """验证：缺反馈时疲劳/恢复为 None——宁可未知，不臆测。"""
     workout = make_workout(started_at=AS_OF - timedelta(hours=10))
     assessment = _evaluate([workout], [])
     assert assessment.fatigue_level is None
@@ -162,6 +171,7 @@ def test_late_reported_feedback_uses_created_at_for_recency() -> None:
 
 
 def test_quality_session_does_not_force_poor_recovery() -> None:
+    """验证：质量课信号不把恢复拉到差（避免误伤正常强度安排）。"""
     workout = make_workout(
         started_at=AS_OF - timedelta(hours=10), workout_type=WorkoutType.INTERVAL
     )
@@ -174,6 +184,7 @@ def test_quality_session_does_not_force_poor_recovery() -> None:
 
 
 def test_load_change_cannot_push_unknown_to_high() -> None:
+    """验证：负荷激增只产生 hard_session 信号，不把无反馈的未知疲劳抬成高。"""
     heavy = make_workout(started_at=AS_OF - timedelta(days=1), duration_s=7200)
     prev = make_workout(started_at=AS_OF - timedelta(days=10), duration_s=1800)
     f1 = make_feedback(workout_id=heavy.id, perceived_exertion=9)
@@ -184,6 +195,7 @@ def test_load_change_cannot_push_unknown_to_high() -> None:
 
 
 def test_confidence_formula() -> None:
+    """验证：置信度由四项等权累加，条件齐备时应为满分 1.0。"""
     workouts = [
         make_workout(started_at=AS_OF - timedelta(days=d)) for d in (1, 2, 3)
     ]
@@ -199,12 +211,15 @@ def test_confidence_formula() -> None:
 
 
 def test_workout_completion_rate_always_none() -> None:
+    """验证：完成率在当前阶段恒为 None（尚无课表完成数据源）。"""
     workout = make_workout(started_at=AS_OF - timedelta(hours=10))
     assessment = _evaluate([workout], [])
     assert assessment.workout_completion_rate is None
 
 
 def test_seed_vertical_slice_inputs_high_fair() -> None:
+    """验证：垂直切片 seed 数据应评估为高疲劳/恢复一般，并携带覆盖率与硬课信号。"""
+    # 借 factory 造一条临时课，只为取得与后续课次相同的 user_id
     user = make_workout(started_at=AS_OF).user_id
     easy = make_workout(
         started_at=datetime(2026, 8, 20, 6, 0, tzinfo=UTC),
@@ -256,6 +271,7 @@ def test_seed_vertical_slice_inputs_high_fair() -> None:
     assert assessment.recovery_level is RecoveryLevel.FAIR
     assert assessment.algorithm_version == "phase3.v1"
     assert assessment.workout_completion_rate is None
+    # 仅一次反馈但四天内四次课，sRPE 覆盖率必然不足一半
     assert assessment.training_load_coverage is not None
     assert assessment.training_load_coverage < 0.5
     assert assessment.recent_training_load is None

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from app.tools.resolver.session import ToolSession
 
 
-@runtime_checkable
+@runtime_checkable  # 让 Protocol 支持 isinstance 结构化检查（只验证方法是否存在）
 class Tool(Protocol):
     """业务 Tool：只用已验证参数与可信上下文执行，不依赖会话状态。
 
@@ -40,7 +40,7 @@ class Tool(Protocol):
     ) -> object: ...
 
 
-@runtime_checkable
+@runtime_checkable  # 让 Protocol 支持 isinstance 结构化检查（只验证方法是否存在）
 class SessionAwareTool(Protocol):
     """发现类系统 Tool：执行体需要当前 ToolSession。
 

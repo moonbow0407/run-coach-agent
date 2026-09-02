@@ -54,6 +54,7 @@ class CoachingToolProvider:
         self._plan_adaptation_service = plan_adaptation_service
 
     def tools(self) -> list[AnyTool]:
+        # 装配只读查询、负荷分析与计划调整草案三类领域能力。
         return [
             GetRecentWorkoutsTool(workout_service=self._workout_service),
             GetWorkoutDetailTool(workout_service=self._workout_service),

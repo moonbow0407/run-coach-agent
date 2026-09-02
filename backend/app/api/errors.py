@@ -18,6 +18,7 @@ from app.common.errors import (
 
 
 def to_http_error(exc: RunCoachError) -> HTTPException:
+    """按异常子类映射状态码：401 认证 / 404 不存在 / 403 禁止 / 409 冲突与一般领域错误 / 其余 500。"""
     if isinstance(exc, AuthenticationError):
         return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     if isinstance(exc, NotFoundError):
@@ -28,4 +29,5 @@ def to_http_error(exc: RunCoachError) -> HTTPException:
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, DomainError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    # 未专门分类的异常一律按服务器内部错误处理，不向客户端泄漏细节。
     return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))

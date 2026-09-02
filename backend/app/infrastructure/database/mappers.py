@@ -126,6 +126,7 @@ def athlete_state_from_row(row: AthleteStateSnapshotRow) -> AthleteStateSnapshot
 
 
 def signals_to_json(signals: tuple[AthleteStateSignal, ...]) -> list[dict[str, Any]]:
+    """领域状态信号 -> JSONB 可存结构（快照落库前序列化）。"""
     return [
         {
             "code": signal.code,
@@ -138,6 +139,7 @@ def signals_to_json(signals: tuple[AthleteStateSignal, ...]) -> list[dict[str, A
 
 
 def _signals_from_json(raw: list[Any] | None) -> tuple[AthleteStateSignal, ...]:
+    """JSONB -> 领域状态信号元组（读快照时还原）。"""
     if not raw:
         return ()
     return tuple(
@@ -173,6 +175,7 @@ def plan_change_from_row(row: PlanChangeRow) -> PlanChange:
 
 
 def payload_from_json(raw: dict[str, Any]) -> PlanChangePayload:
+    """JSONB -> 计划调整提案载荷（内含逐课次的替换明细）。"""
     changes = tuple(
         SessionChange(
             source_session_id=UUID(item["source_session_id"]),
@@ -190,6 +193,7 @@ def payload_from_json(raw: dict[str, Any]) -> PlanChangePayload:
 
 
 def payload_to_json(payload: PlanChangePayload) -> dict[str, Any]:
+    """计划调整提案载荷 -> JSONB 可存结构（UUID/日期转字符串）。"""
     return {
         "horizon_days": payload.horizon_days,
         "changes": [

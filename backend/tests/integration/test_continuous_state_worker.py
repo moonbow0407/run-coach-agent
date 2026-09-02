@@ -22,7 +22,9 @@ async def test_late_historical_workout_uses_availability_cutoff_not_fact_time(
     user_id,
     clock,
 ) -> None:
+    """验证：迟到 30 天的历史课次触发重算时，快照 as_of 取事件可用时间而非事实发生时间；事件重放被 receipt 幂等拦截。"""
     app = make_app()
+    # 构造一次发生在 30 天前的课次（事实时间远早于入库时间）。
     workout = await app.state.workout_command_service.record(
         user_id=user_id,
         mutation=WorkoutMutation(
@@ -40,6 +42,7 @@ async def test_late_historical_workout_uses_availability_cutoff_not_fact_time(
     snapshot = await app.state.athlete_service.get_latest_athlete_state(user_id=user_id)
 
     assert workout.started_at == clock.now() - timedelta(days=30)
+    # 事实时间保留原始值，但快照的可信时间锚定在事件可用时刻。
     assert workout.updated_at == clock.now()
     assert snapshot is not None
     assert snapshot.version == 1
@@ -61,6 +64,7 @@ async def test_same_user_burst_coalesces_and_cross_user_state_stays_isolated(
     user_id,
     clock,
 ) -> None:
+    """验证：同一用户并发记录多课只合并出一次快照（多余触发 obsolete_noop），另一用户独立产生自己的快照。"""
     other_user = new_id()
     async with short_session(sessions, commit=True) as session:
         session.add(UserRow(id=other_user, created_at=clock.now(), updated_at=clock.now()))
@@ -77,6 +81,7 @@ async def test_same_user_burst_coalesces_and_cross_user_state_stays_isolated(
             source=WorkoutSource.MANUAL,
         )
 
+    # asyncio.gather：并发原语，同时提交三条记录——同用户两条 + 另一用户一条。
     await asyncio.gather(
         app.state.workout_command_service.record(
             user_id=user_id,

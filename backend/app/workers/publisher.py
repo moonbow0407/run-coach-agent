@@ -17,13 +17,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PublishBatchResult:
-    claimed: int
-    published: int
-    rescheduled: int
-    quarantined: int
+    """一批发布的统计结果（不可变数据类）。"""
+
+    claimed: int  # 本批抢占到的待发布事件数
+    published: int  # 成功投递到队列的事件数
+    rescheduled: int  # 投递失败、按退避重排的事件数
+    quarantined: int  # 数据损坏或不支持而隔离（quarantine）的事件数
 
 
 class OutboxPublisher:
+    """outbox（本地消息表）发布器：轮询业务事务落库的事件，投递到 arq 队列。"""
+
     def __init__(
         self,
         *,
@@ -34,14 +38,16 @@ class OutboxPublisher:
         claim_lease: timedelta = timedelta(minutes=2),
         batch_size: int = 100,
     ) -> None:
-        self._repository = repository
-        self._queue = queue
-        self._clock = clock
-        self._worker_id = worker_id
-        self._claim_lease = claim_lease
-        self._batch_size = batch_size
+        self._repository = repository  # outbox 仓库：待发布事件的存取
+        self._queue = queue  # 队列发布端口（不依赖具体队列实现）
+        self._clock = clock  # 时钟：统一取“当前时间”，便于测试注入
+        self._worker_id = worker_id  # 本 Worker 标识：写入 claim，防多实例重复发布
+        self._claim_lease = claim_lease  # claim 租约：发布中断后事件不会立刻被重新抢占
+        self._batch_size = batch_size  # 单批最多处理的事件数
 
     async def publish_batch(self) -> PublishBatchResult:
+        """处理一批待发布事件：逐条投递；投递失败按退避重排，坏数据隔离。"""
+        # 抢占一批 pending 事件（带租约）：多实例部署下同一事件同一时刻只被一个实例发布。
         claimed = await self._repository.claim_pending(
             worker_id=self._worker_id,
             now=self._clock.now(),
@@ -53,6 +59,7 @@ class OutboxPublisher:
         quarantined = 0
         for item in claimed:
             started = perf_counter()
+            # 事件 JSON 损坏无法解码：隔离（quarantine）并告警，避免阻塞后续事件。
             if item.decode_error is not None or item.event is None:
                 await self._repository.quarantine(
                     event_id=item.event_id,
@@ -83,6 +90,7 @@ class OutboxPublisher:
                 continue
             event = item.event
             try:
+                # 按路由表把事件转成任务信封；路由表不认识的事件说明 schema 不支持。
                 tasks = route_event(event, enqueued_at=self._clock.now())
             except DomainError:
                 await self._repository.quarantine(
@@ -143,6 +151,7 @@ class OutboxPublisher:
                     exc_info=exc,
                 )
                 continue
+            # 全部任务入队成功：标记 published；后续执行由 consumer 负责。
             await self._repository.mark_published(
                 event_id=event.event_id,
                 worker_id=self._worker_id,

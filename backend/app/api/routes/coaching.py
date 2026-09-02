@@ -32,6 +32,7 @@ from app.identity.application.request_context import RequestContext
 router = APIRouter()
 
 
+# 从 app.state 取启动时装配好的各查询服务（路由保持无状态）。
 def _goals(request: Request) -> GoalQueryService:
     return request.app.state.goal_service
 
@@ -53,6 +54,7 @@ async def get_active_goal(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> ActiveGoalResponse:
+    """读取当前生效的训练目标；无目标时按 404 返回，前端渲染为空状态。"""
     try:
         goal = await _goals(request).get_active_goal(user_id=request_context.user_id)
     except RunCoachError as exc:
@@ -76,6 +78,7 @@ async def get_active_plan(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> ActivePlanResponse:
+    """读取当前生效计划及时间窗内的课次摘要；无计划时按 404 返回。"""
     try:
         summary = await _plans(request).get_active_plan_summary(
             user_id=request_context.user_id, as_of=request_context.timestamp
@@ -114,6 +117,7 @@ async def get_latest_athlete_state(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
 ) -> AthleteStateResponse:
+    """读取最近一次系统推导的跑者状态快照；从未生成过时按 404 返回。"""
     try:
         snapshot = await _athlete(request).get_latest_athlete_state(user_id=request_context.user_id)
     except RunCoachError as exc:
@@ -187,8 +191,9 @@ async def get_workout_feedback(
 async def list_recent_workouts(
     request_context: Annotated[RequestContext, Depends(get_request_context)],
     request: Request,
-    days: Annotated[int, Query(ge=1, le=365)] = 30,
+    days: Annotated[int, Query(ge=1, le=365)] = 30,  # 查询窗口天数（1-365，默认 30）
 ) -> WorkoutListResponse:
+    """按天数窗口列出最近的训练记录。"""
     try:
         workouts = await _workouts(request).get_recent_workouts(
             user_id=request_context.user_id, days=days

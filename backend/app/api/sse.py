@@ -23,6 +23,7 @@ from app.agent.lifecycle.events import (
 
 
 def map_lifecycle_event(event: LifecycleEvent) -> tuple[str, dict[str, object]] | None:
+    """把生命周期事件映射为（SSE 事件名, 载荷）；返回 None 表示该事件不推送。"""
     if isinstance(event, TurnStarted):
         return "run.started", {
             "turn_id": str(event.turn_id),
@@ -57,13 +58,16 @@ def map_lifecycle_event(event: LifecycleEvent) -> tuple[str, dict[str, object]] 
         return "run.failed", {"turn_id": str(event.turn_id), "error": event.error}
     if isinstance(event, TurnCancelled):
         return "run.cancelled", {"turn_id": str(event.turn_id)}
+    # 未知事件类型：跳过不推送（向前兼容新增事件）。
     return None
 
 
 def format_sse(event_name: str, payload: dict[str, object]) -> str:
+    """编码一帧 SSE（Server-Sent Events）：event 行 + data 行 + 空行结尾。"""
     return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 async def iter_sse(chunks: AsyncIterator[str]) -> AsyncIterator[str]:
+    """把异步字符串流原样透传为 SSE 流（当前为直通实现）。"""
     async for chunk in chunks:
         yield chunk

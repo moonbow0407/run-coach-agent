@@ -22,6 +22,7 @@ from app.tools.resolver.resolver import VisibleTool
 
 
 def _bundle(recent: list[MessageView] | None = None) -> ContextBundle:
+    """构造空上下文 bundle：无记忆、无状态，只带系统提示与当前输入。"""
     return ContextBundle(
         system="你是教练。",
         working_context=WorkingContext(
@@ -38,6 +39,7 @@ def _bundle(recent: list[MessageView] | None = None) -> ContextBundle:
 
 
 def _visible_tool() -> VisibleTool:
+    """构造一个最小可见工具定义。"""
     return VisibleTool(
         name="get_recent_workouts",
         description="读取训练记录",
@@ -46,6 +48,7 @@ def _visible_tool() -> VisibleTool:
 
 
 def test_basic_sequence_system_history_current_input() -> None:
+    """验证：无历史时消息序列仅 system + 当前输入；工具走独立 tools 字段而非塞进提示词。"""
     renderer = PromptRenderer()
     request = renderer.render(_bundle(), ReasoningState(), [_visible_tool()])
     kinds = [type(message).__name__ for message in request.messages]
@@ -60,6 +63,7 @@ def test_basic_sequence_system_history_current_input() -> None:
 
 
 def test_history_messages_become_user_assistant_text() -> None:
+    """验证：历史消息按 role 还原为 user/assistant 文本，当前输入排在最后。"""
     renderer = PromptRenderer()
     recent = [
         MessageView(role="user", content="之前的问题", created_at=datetime.now(UTC)),
@@ -73,6 +77,7 @@ def test_history_messages_become_user_assistant_text() -> None:
 
 
 def test_interactions_become_native_tool_call_and_result() -> None:
+    """验证：本次 Run 的工具交互还原为原生 tool call / tool result 消息对。"""
     renderer = PromptRenderer()
     state = ReasoningState()
     state.append(

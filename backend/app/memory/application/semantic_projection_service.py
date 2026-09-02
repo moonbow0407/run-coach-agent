@@ -14,11 +14,13 @@ from app.memory.ports.evidence_reader import EvidenceReader, ValidatedEvidence
 from app.memory.ports.extractor import ExtractedSemanticCandidate, SemanticMemoryExtractor
 from app.memory.ports.repositories import MemoryRepository, ProjectionResult
 
-PROJECTOR_NAME = "semantic_memory"
-EMBEDDING_DIMENSIONS = 1536
+PROJECTOR_NAME = "semantic_memory"  # 投影器名：仓储端按它区分不同投影器的输出
+EMBEDDING_DIMENSIONS = 1536  # 向量维度契约：嵌入结果必须严格一致
 
 
 class SemanticMemoryProjectionService:
+    """语义记忆投影服务：把已提交对话或证据集投影为语义记忆条目。"""
+
     def __init__(
         self,
         *,
@@ -29,12 +31,13 @@ class SemanticMemoryProjectionService:
         repository: MemoryRepository,
         clock: Clock,
     ) -> None:
-        self._conversations = conversations
-        self._evidence = evidence_reader
-        self._extractor = extractor
-        self._embedding = embedding
-        self._repository = repository
-        self._clock = clock
+        # 依赖全部是端口抽象，便于替换实现与测试注入。
+        self._conversations = conversations  # 会话读取端口：取已提交 Turn 的消息
+        self._evidence = evidence_reader  # 证据读取端口：读取已确认来源
+        self._extractor = extractor  # 语义提取端口：外部模型抽取记忆候选
+        self._embedding = embedding  # 向量化端口
+        self._repository = repository  # Memory 仓储端口：短事务原子合并
+        self._clock = clock  # 时钟端口：统一"当前时间"基准
 
     async def project_committed_turn(
         self,
@@ -43,20 +46,25 @@ class SemanticMemoryProjectionService:
         turn_id: UUID,
         projector_version: str,
     ) -> ProjectionResult:
+        """把一轮已提交对话投影为语义记忆（用户明示偏好的入口）。"""
         committed = await self._conversations.get_committed_turn_messages(
             user_id=user_id, turn_id=turn_id
         )
+        # Turn 尚未提交或不存在：无法投影，直接报错而非静默跳过。
         if committed is None:
             raise NotFoundError("committed_turn_not_found")
+        # 由外部模型从双方消息中抽取记忆候选（限定在支持的类型内）。
         extracted = await self._extractor.extract(
             user_message=committed.user_message,
             assistant_message=committed.assistant_message,
             committed_at=committed.committed_at,
             supported_types=tuple(SemanticMemoryType),
         )
+        # 同一轮对话的多条证据归入同组：独立来源计数只算一次。
         group_key = f"conversation:turn:{turn_id}"
         candidates: list[SemanticMemoryCandidate] = []
         for item in extracted:
+            # 对话投影只允许"用户明示"候选；推断候选必须走证据集投影。
             if item.origin is not MemoryOrigin.EXPLICIT:
                 raise DomainError("conversation_projection_requires_explicit_candidate")
             candidates.append(
@@ -68,6 +76,7 @@ class SemanticMemoryProjectionService:
                     content=item.content,
                     valid_from=item.valid_from,
                     valid_until=item.valid_until,
+                    # 每个候选绑定两条同组证据：用户消息为主证据，Turn 为派生上下文。
                     evidence=(
                         EvidenceRef(
                             source_type=EvidenceSourceType.MESSAGE,
@@ -86,6 +95,7 @@ class SemanticMemoryProjectionService:
                     ),
                 )
             )
+        # 检查点只含消息身份与内容哈希，不落私密原文，用于幂等重放判断。
         checkpoint = {
             "turn_id": str(turn_id),
             "user_message_id": str(committed.user_message.id),
@@ -98,6 +108,7 @@ class SemanticMemoryProjectionService:
                 committed.assistant_message.content.encode("utf-8")
             ).hexdigest(),
         }
+        # 外部模型调用（提取/向量化）全部完成后，才进入仓储短事务落库。
         batch = await self._embed(tuple(item.content for item in candidates))
         return await self._repository.apply_semantic_projection(
             user_id=user_id,
@@ -121,6 +132,8 @@ class SemanticMemoryProjectionService:
         source_ids: tuple[tuple[EvidenceSourceType, UUID], ...],
         projector_version: str,
     ) -> ProjectionResult:
+        """把一组已确认证据投影为一条"推断"语义记忆（如从训练数据归纳）。"""
+        # 只接受推断候选：明示候选必须走对话投影路径，两条入口不允许混用。
         if candidate.origin is not MemoryOrigin.INFERRED:
             raise DomainError("evidence_set_projection_requires_inferred_candidate")
         sources = await self._evidence.read_many(user_id=user_id, source_ids=source_ids)
@@ -135,6 +148,7 @@ class SemanticMemoryProjectionService:
             valid_until=candidate.valid_until,
             evidence=evidence,
         )
+        # 投影键由来源集合决定：同一来源集合重复投影可幂等重放。
         checkpoint = _source_checkpoint(sources)
         identity = fingerprint({"sources": sorted(str(item) for item in source_ids)})
         batch = await self._embed((semantic.content,))
@@ -153,10 +167,13 @@ class SemanticMemoryProjectionService:
         )
 
     async def _embed(self, texts: tuple[str, ...]):
+        """向量化文本并校验维度契约；空输入直接返回占位空批次。"""
         if not texts:
+            # 局部导入仅在构造空批次返回值时需要，保持顶层依赖精简。
             from app.memory.ports.embedding import EmbeddingBatch
 
             return EmbeddingBatch((), "none", "none", EMBEDDING_DIMENSIONS)
+        # 供应商返回的批次数与维度必须严格符合契约，不符合即 fail fast。
         batch = await self._embedding.embed(texts)
         if batch.dimensions != EMBEDDING_DIMENSIONS or len(batch.vectors) != len(texts):
             raise DomainError("memory_embedding_contract_mismatch")
@@ -166,6 +183,7 @@ class SemanticMemoryProjectionService:
 
 
 def _source_checkpoint(sources: tuple[ValidatedEvidence, ...]) -> dict[str, object]:
+    """构造来源检查点：只含来源 identity/version（排序后），用于幂等判断。"""
     return {
         "sources": [
             {
@@ -181,6 +199,7 @@ def _source_checkpoint(sources: tuple[ValidatedEvidence, ...]) -> dict[str, obje
 
 
 def _memory_evidence(source: ValidatedEvidence) -> EvidenceRef:
+    """把校验证据裁剪为记忆可引用的 EvidenceRef（不携带 facts 原文）。"""
     return EvidenceRef(
         source_type=source.source_type,
         source_id=source.source_id,
@@ -191,12 +210,14 @@ def _memory_evidence(source: ValidatedEvidence) -> EvidenceRef:
 
 
 def _primary():
+    """返回主证据角色（局部导入，保持顶层依赖精简）。"""
     from app.memory.domain.evidence import EvidenceIndependenceRole
 
     return EvidenceIndependenceRole.PRIMARY
 
 
 def _derived():
+    """返回派生上下文角色（局部导入，保持顶层依赖精简）。"""
     from app.memory.domain.evidence import EvidenceIndependenceRole
 
     return EvidenceIndependenceRole.DERIVED_CONTEXT

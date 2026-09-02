@@ -13,6 +13,7 @@ from app.agent.reasoning.state import ReasoningState
 from app.tools.resolver.resolver import VisibleTool
 
 
+# frozen=True：不可变数据类，消息序列组装后不可修改
 @dataclass(frozen=True)
 class SystemMessage:
     """system 文本指令。"""
@@ -42,8 +43,8 @@ class AssistantToolCall:
     tool result 中原样回传。
     """
 
-    tool: str
-    arguments: dict[str, Any]
+    tool: str  # 工具名
+    arguments: dict[str, Any]  # 模型给出的 JSON 参数
     model_call_id: str
 
 
@@ -51,10 +52,11 @@ class AssistantToolCall:
 class ToolResultMessage:
     """一次工具调用的结果回传。content 为序列化后的 Observation。"""
 
-    model_call_id: str
-    content: str
+    model_call_id: str  # 对应工具调用的协议 ID，用于结果配对
+    content: str  # 序列化后的 Observation JSON
 
 
+# 五类消息的合集类型：一次模型请求的消息序列由它们按序组成
 ModelMessage = (
     SystemMessage | UserMessage | AssistantMessage | AssistantToolCall | ToolResultMessage
 )
@@ -64,36 +66,36 @@ ModelMessage = (
 class ModelToolDefinition:
     """传给模型的 native tool 定义。parameters_schema 来自 Tool 参数模型。"""
 
-    name: str
-    description: str
-    parameters_schema: dict[str, Any]
+    name: str  # 工具名，模型通过它指定要调用的工具
+    description: str  # 工具用途说明，帮助模型判断何时调用
+    parameters_schema: dict[str, Any]  # 参数 JSON Schema，约束 arguments 的结构
 
 
 @dataclass(frozen=True)
 class ModelRequest:
     """一次模型调用请求：消息序列 + 每轮动态可见的 Tool 定义。"""
 
-    messages: tuple[ModelMessage, ...]
-    tools: tuple[ModelToolDefinition, ...] = ()
+    messages: tuple[ModelMessage, ...]  # 按序排列的 native 消息序列
+    tools: tuple[ModelToolDefinition, ...] = ()  # 本轮可见的 Tool 定义
 
 
 @dataclass(frozen=True)
 class ModelToolCall:
     """模型返回的 native tool call。arguments 已由 Provider 解析为 JSON 对象。"""
 
-    model_call_id: str
-    tool: str
-    arguments: dict[str, Any]
+    model_call_id: str  # 供应商返回的协议 ID
+    tool: str  # 模型选择调用的工具名
+    arguments: dict[str, Any]  # 模型给出的调用参数
 
 
 @dataclass(frozen=True)
 class ModelResponse:
     """模型返回：文本与 native tool call（可能同时出现，附带文本不构成回答）。"""
 
-    text: str
-    model: str
-    tool_calls: tuple[ModelToolCall, ...] = ()
-    usage: dict[str, int] | None = None
+    text: str  # 模型文本输出（可能为空）
+    model: str  # 实际使用的模型标识
+    tool_calls: tuple[ModelToolCall, ...] = ()  # 模型发起的工具调用
+    usage: dict[str, int] | None = None  # token 用量统计（可选）
 
 
 @dataclass
@@ -104,6 +106,6 @@ class ReasoningContext:
     任何 Tool 定义。
     """
 
-    context_bundle: ContextBundle
-    state: ReasoningState
-    visible_tools: list[VisibleTool]
+    context_bundle: ContextBundle  # 装配好的上下文，整个 Run 内不变
+    state: ReasoningState  # Run 内已发生的工具调用与结果
+    visible_tools: list[VisibleTool]  # 本轮可见 Tool，每轮可能变化

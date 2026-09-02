@@ -12,6 +12,7 @@ from tests.helpers import event_types, load_run_steps, record_events, request_co
 
 
 def _tool_call(tool: str, arguments: dict, call_id: str) -> ToolCallAction:
+    """构造脚本中的一步：一次模型 Tool 调用动作（call_id 用于与观察结果配对）。"""
     return ToolCallAction(tool=tool, arguments=arguments, model_call_id=call_id)
 
 

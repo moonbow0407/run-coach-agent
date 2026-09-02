@@ -1,3 +1,8 @@
+"""端到端教练场景测试：用户中途取消对话。
+
+Turn 处理中被取消时应落库为 CANCELLED：不提交助手回复，正在执行的 Tool 也被立即中止。
+"""
+
 import asyncio
 
 import pytest
@@ -21,6 +26,8 @@ from tests.helpers import (
 
 
 class SlowReasoner:
+    """极慢的假推理器：睡 30 秒才出结果，为「取消」留出操作窗口。"""
+
     async def reason(self, context: ReasoningContext) -> FinalAction:
         await asyncio.sleep(30)
         return FinalAction(content="不应该返回")
@@ -76,9 +83,11 @@ async def test_cancelled_turn(
     clock,
     sessions,
 ) -> None:
+    """场景：用户在推理期间取消请求 → 期望：Turn 记为 CANCELLED，不产生助手回复。"""
     app = make_app(reasoner=SlowReasoner())
     events = record_events(app.state.lifecycle)
     context = request_context_for(slice_seed.user_id, clock)
+    # 后台发起一轮对话，不等待其完成，以便中途取消。
     task = asyncio.create_task(
         app.state.chat_service.send_message(
             request_context=context,
@@ -86,21 +95,25 @@ async def test_cancelled_turn(
             content="先说到这里",
         )
     )
+    # 轮询等待「Turn 已开始」事件，确保取消发生在推理进行中。
     for _ in range(100):
         if any(isinstance(event, TurnStarted) for event in events):
             await asyncio.sleep(0.02)
             break
         await asyncio.sleep(0.01)
     task.cancel()
+    # pytest.raises：断言 await 时抛出指定异常；取消表现为 CancelledError 或业务层取消错误。
     with pytest.raises((asyncio.CancelledError, TurnCancelledError)):
         await task
 
+    # 已取消的 Turn 绝不允许提交。
     assert "TurnCommitted" not in event_types(events)
     cancelled = next(event for event in events if isinstance(event, TurnCancelled))
     turn = await load_turn(sessions, cancelled.turn_id)
     assert turn.status == TurnStatus.CANCELLED.value
     assert turn.assistant_message_id is None
     messages = await load_turn_messages(sessions, cancelled.turn_id)
+    # 只落库用户原话，没有助手回复。
     assert [message.role for message in messages] == ["user"]
     assert messages[0].content == "先说到这里"
 
@@ -138,12 +151,15 @@ async def test_cancelled_turn_stops_running_tool(
         )
     )
 
+    # 先等 Tool 真正开跑再取消，保证取消命中「Tool 执行中」状态。
     await asyncio.wait_for(tool_started.wait(), timeout=10)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    # 取消必须传播进 Tool 执行体（Tool 内部感知 CancelledError），否则此处会超时。
     await asyncio.wait_for(tool_cancelled.wait(), timeout=10)
 
+    # 被打断的 Tool 不算完成。
     assert not any(isinstance(event, ToolCompleted) for event in events)
     assert "TurnCommitted" not in event_types(events)
     cancelled = next(event for event in events if isinstance(event, TurnCancelled))

@@ -19,12 +19,15 @@ from app.workers.publisher import OutboxPublisher
 
 
 class _Queue:
+    """桩队列：任何 enqueue 调用都直接失败，用于证明毒事件绝不入队。"""
+
     async def enqueue(self, task, *, defer_by: timedelta | None = None) -> None:
         raise AssertionError("poison event must not be enqueued")
 
 
 @pytest.mark.asyncio
 async def test_invalid_change_kind_is_quarantined(sessions, user_id, clock) -> None:
+    """验证：payload 的 change_kind 变成非法枚举后，Publisher 直接隔离该事件而不投递。"""
     event = new_workout_changed_event(
         user_id=user_id,
         payload=WorkoutChangedV1(new_id(), ChangeKind.RECORDED, clock.now(), clock.now()),
@@ -32,6 +35,7 @@ async def test_invalid_change_kind_is_quarantined(sessions, user_id, clock) -> N
     )
     async with sessions.begin() as session:
         OutboxWriter().add(session, event)
+    # 绕过应用层直接改库中 payload，模拟"事件落库后被污染"。
     async with sessions.begin() as session:
         row = await session.scalar(select(OutboxEventRow).where(OutboxEventRow.event_id == event.event_id))
         payload = dict(row.payload)

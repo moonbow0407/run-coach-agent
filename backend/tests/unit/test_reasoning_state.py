@@ -9,16 +9,19 @@ from app.common.errors import AgentRuntimeError
 
 
 def _action(model_call_id: str = "call_a") -> ToolCallAction:
+    """构造一次工具调用动作。"""
     return ToolCallAction(tool="get_recent_workouts", arguments={"days": 7}, model_call_id=model_call_id)
 
 
 def _observation(model_call_id: str = "call_a") -> Observation:
+    """构造与调用配对的成功观测。"""
     return Observation(
         source="get_recent_workouts", status="success", data=[], model_call_id=model_call_id
     )
 
 
 def test_valid_sequence_is_accepted() -> None:
+    """验证：call/observation 严格交替且 id 配对的合法序列被接受。"""
     state = ReasoningState()
     action = _action("call_a")
     state.append(action)
@@ -34,12 +37,14 @@ def test_valid_sequence_is_accepted() -> None:
 
 
 def test_orphan_observation_fails() -> None:
+    """验证：没有前置调用的孤立 Observation 被拒绝。"""
     state = ReasoningState()
     with pytest.raises(AgentRuntimeError, match="紧邻"):
         state.append(_observation())
 
 
 def test_missing_observation_before_next_call_fails() -> None:
+    """验证：上一个调用尚未得到观测前，不允许发起新调用。"""
     state = ReasoningState()
     state.append(_action("call_a"))
     with pytest.raises(AgentRuntimeError, match="尚无对应的 Observation"):
@@ -47,6 +52,7 @@ def test_missing_observation_before_next_call_fails() -> None:
 
 
 def test_model_call_id_mismatch_fails() -> None:
+    """验证：观测的 model_call_id 必须与紧邻调用一致（防错位配对）。"""
     state = ReasoningState()
     state.append(_action("call_a"))
     with pytest.raises(AgentRuntimeError, match="不一致"):
@@ -54,6 +60,7 @@ def test_model_call_id_mismatch_fails() -> None:
 
 
 def test_duplicate_model_call_id_fails() -> None:
+    """验证：同一 model_call_id 不得复用（保证配对唯一）。"""
     state = ReasoningState()
     state.append(_action("call_a"))
     state.append(_observation("call_a"))
@@ -62,6 +69,7 @@ def test_duplicate_model_call_id_fails() -> None:
 
 
 def test_final_action_rejected() -> None:
+    """验证：FinalAction 属于最终答复，不属于交互序列，禁止 append。"""
     state = ReasoningState()
     with pytest.raises(AgentRuntimeError, match="FinalAction"):
         state.append(FinalAction(content="done"))  # type: ignore[arg-type]

@@ -111,31 +111,33 @@ from app.tools.search.keyword_search import KeywordToolSearch
 
 @dataclass
 class AppContainer:
-    settings: Settings
-    clock: Clock
-    engine: AsyncEngine
-    sessions: async_sessionmaker[AsyncSession]
-    lifecycle: LifecycleDispatcher
-    conversation_store: SqlAlchemyConversationStore
-    conversation_reader: SqlAlchemyConversationReader
-    chat_service: ChatService
-    reasoner: Reasoner
-    tool_runtime: ToolRuntime
-    tool_registry: ToolRegistry
-    goal_service: GoalQueryService
-    plan_service: PlanQueryService
-    athlete_service: AthleteStateQueryService
-    workout_service: WorkoutQueryService
-    workout_command_service: WorkoutCommandService
-    workout_feedback_command_service: WorkoutFeedbackCommandService
-    athlete_recompute_service: AthleteStateRecomputeService
-    plan_adaptation_service: PlanAdaptationService
-    terminal_turn_finalization_service: TerminalTurnFinalizationService
-    training_analysis_service: TrainingAnalysisService
-    semantic_memory_projection_service: SemanticMemoryProjectionService
-    episode_projection_service: EpisodeProjectionService
-    memory_retrieval_service: MemoryRetrievalService
-    memory_lifecycle_service: MemoryLifecycleService
+    """组合根产出的对象图：应用各层实现按依赖方向接线后的容器。"""
+
+    settings: Settings  # 运行配置
+    clock: Clock  # 时钟（可注入假时钟供测试）
+    engine: AsyncEngine  # 数据库异步引擎
+    sessions: async_sessionmaker[AsyncSession]  # 全局共享的 session 工厂
+    lifecycle: LifecycleDispatcher  # Agent 终态事件分发器（进程内事件总线）
+    conversation_store: SqlAlchemyConversationStore  # 对话写路径（Turn 生命周期事务）
+    conversation_reader: SqlAlchemyConversationReader  # 对话只读查询
+    chat_service: ChatService  # 对话编排与事务边界
+    reasoner: Reasoner  # 大模型推理器
+    tool_runtime: ToolRuntime  # Tool 治理入口（搜索/解析/执行）
+    tool_registry: ToolRegistry  # 工具注册表
+    goal_service: GoalQueryService  # 目标查询
+    plan_service: PlanQueryService  # 计划查询
+    athlete_service: AthleteStateQueryService  # 跑者状态查询
+    workout_service: WorkoutQueryService  # 训练查询
+    workout_command_service: WorkoutCommandService  # 训练写入（含 outbox 事件）
+    workout_feedback_command_service: WorkoutFeedbackCommandService  # 训练反馈写入
+    athlete_recompute_service: AthleteStateRecomputeService  # 跑者状态重算
+    plan_adaptation_service: PlanAdaptationService  # 计划调整（提案生成/确认）
+    terminal_turn_finalization_service: TerminalTurnFinalizationService  # Turn 终态收尾（驱动计划适配）
+    training_analysis_service: TrainingAnalysisService  # 训练负荷分析
+    semantic_memory_projection_service: SemanticMemoryProjectionService  # 语义记忆投影
+    episode_projection_service: EpisodeProjectionService  # 情节记忆投影
+    memory_retrieval_service: MemoryRetrievalService  # 记忆相似检索
+    memory_lifecycle_service: MemoryLifecycleService  # 记忆生命周期（过期/取代）
 
 
 def build_container(
@@ -148,6 +150,7 @@ def build_container(
     embedding_provider: EmbeddingProvider | None = None,
     episode_detector: EpisodeDetector | None = None,
 ) -> AppContainer:
+    """按依赖方向把全部实现装配成 AppContainer；参数可注入测试替身。"""
     clock = clock or SystemClock()
     engine = create_engine(settings.database_url, poolclass=poolclass)
     sessions = create_session_factory(engine)
@@ -190,16 +193,18 @@ def build_container(
     trace_recorder = SqlAlchemyAgentTraceRecorder(sessions, clock)
 
     if settings.memory_embedding_dimensions != 1536:
+        # 维度是 Phase 4 持久化合同：pgvector 列按 1536 建，不允许随意改
         raise InfrastructureError("memory_embedding_dimensions_must_be_1536")
     memory_client: AsyncOpenAI | None = None
     if settings.llm_api_key:
         if not settings.llm_base_url or not settings.llm_model:
             raise ReasonerError("配置 LLM_API_KEY 时必须同时配置 LLM_BASE_URL 与 LLM_MODEL")
-        memory_client = AsyncOpenAI(
+        memory_client = AsyncOpenAI(  # 记忆抽取与 embedding 共用同一 OpenAI 客户端
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
         )
     if embedding_provider is None:
+        # 未注入替身时按配置装配：有客户端用真实现，否则显式失败边界
         embedding_provider = (
             OpenAIEmbeddingProvider(
                 client=memory_client,
@@ -211,6 +216,7 @@ def build_container(
             else UnavailableEmbeddingProvider()
         )
     if memory_extractor is None:
+        # 同上：LLM 配置齐备才装配真抽取器，否则显式失败
         memory_extractor = (
             OpenAISemanticMemoryExtractor(client=memory_client, model=settings.llm_model)
             if memory_client is not None and settings.llm_model is not None
@@ -273,7 +279,7 @@ def build_container(
     )
     if reasoner is None:
         if not settings.llm_api_key:
-            reasoner = _MissingLLMReasoner()
+            reasoner = _MissingLLMReasoner()  # 未配置 LLM：运行到推理时才显式报错
         else:
             if not settings.llm_base_url or not settings.llm_model:
                 raise ReasonerError("启用 LLMReasoner 时必须同时配置 LLM_BASE_URL 与 LLM_MODEL")
@@ -327,6 +333,8 @@ def build_container(
 
 
 class _MissingLLMReasoner:
+    """未配置 LLM 时的占位实现：一旦被调用立即报错，不伪造推理结果。"""
+
     async def reason(self, context: object) -> object:
         raise ReasonerError("未配置 LLM_API_KEY，无法使用 LLMReasoner")
 
@@ -341,6 +349,7 @@ def create_app(
     embedding_provider: EmbeddingProvider | None = None,
     episode_detector: EpisodeDetector | None = None,
 ) -> FastAPI:
+    """创建 FastAPI 应用：装配容器、挂载 state 与路由；参数供测试注入替身。"""
     configure_logging()
     settings = settings or Settings()
     container = build_container(
@@ -355,6 +364,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # 应用关闭时释放数据库连接池
         yield
         await app.state.engine.dispose()
 

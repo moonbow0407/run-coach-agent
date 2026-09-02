@@ -1,3 +1,5 @@
+"""会话存储链路：Turn 状态机（running/committed/failed/cancelled）落库并在 outbox 发对应终态事件。"""
+
 from uuid import UUID
 
 import pytest
@@ -32,6 +34,7 @@ async def test_start_and_commit_turn(
     user_id: UUID,
     clock: FrozenClock,
 ) -> None:
+    """验证：start_turn 落 RUNNING 与用户消息；commit_turn 写助手消息、置 COMMITTED 并发 TURN_COMMITTED 事件。"""
     store = SqlAlchemyConversationStore(sessions, clock, OutboxWriter())
     started = await store.start_turn(user_id=user_id, thread_id=None, content="hello")
     assert started.turn.status is TurnStatus.RUNNING
@@ -65,6 +68,7 @@ async def test_fail_turn_keeps_user_message_without_assistant(
     user_id: UUID,
     clock: FrozenClock,
 ) -> None:
+    """验证：失败 Turn 保留用户消息、不产生助手消息，状态置 FAILED 并发 TURN_FAILED 事件。"""
     store = SqlAlchemyConversationStore(sessions, clock, OutboxWriter())
     started = await store.start_turn(user_id=user_id, thread_id=None, content="oops")
     metadata = _metadata()
@@ -99,6 +103,7 @@ async def test_cancel_turn(
     user_id: UUID,
     clock: FrozenClock,
 ) -> None:
+    """验证：取消把 Turn 置为 CANCELLED，并在 outbox 落 TURN_CANCELLED 事件。"""
     store = SqlAlchemyConversationStore(sessions, clock, OutboxWriter())
     started = await store.start_turn(user_id=user_id, thread_id=None, content="stop")
     metadata = _metadata()
@@ -127,11 +132,13 @@ async def test_thread_belongs_to_user(
     user_id: UUID,
     clock: FrozenClock,
 ) -> None:
+    """验证：其他用户向不属于自己的会话线程发消息被拒，线程归属强制校验。"""
     store = SqlAlchemyConversationStore(sessions, clock, OutboxWriter())
     started = await store.start_turn(user_id=user_id, thread_id=None, content="owner")
     other = new_id()
     async with short_session(sessions, commit=True) as session:
         session.add(UserRow(id=other, created_at=clock.now(), updated_at=clock.now()))
+    # pytest.raises：断言下面的调用抛出预期异常（越权访问）。
     with pytest.raises(ForbiddenError):
         await store.start_turn(
             user_id=other,

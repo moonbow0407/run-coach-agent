@@ -1,4 +1,8 @@
-"""Phase 2 必过场景：Tool Result Budget 与 Conversation Boundary。"""
+"""Phase 2 必过场景：Tool Result Budget 与 Conversation Boundary。
+
+模拟用户询问未来计划：验证计划 Tool 的窗口与 20 条截断预算，
+以及 Tool 交互细节不进入用户可见的会话消息。
+"""
 
 from datetime import date, timedelta
 from uuid import uuid4
@@ -14,6 +18,7 @@ from tests.helpers import load_turn_messages, request_context_for
 
 
 def _tool_call(tool: str, arguments: dict, call_id: str) -> ToolCallAction:
+    """构造脚本中的一步：一次模型 Tool 调用动作。"""
     return ToolCallAction(tool=tool, arguments=arguments, model_call_id=call_id)
 
 

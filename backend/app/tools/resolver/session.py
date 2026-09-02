@@ -17,15 +17,17 @@ if TYPE_CHECKING:
 
 class ToolSession:
     def __init__(self, *, run_id: UUID, registry: "ToolRegistry") -> None:
-        self._run_id = run_id
-        self._registry = registry
-        self._discovery = ToolDiscoveryState()
+        self._run_id = run_id  # 所属 AgentRun：会话生命周期与 Run 一致
+        self._registry = registry  # Registry 引用：unlock 时做存在性再确认
+        self._discovery = ToolDiscoveryState()  # Run 内已解锁工具集合
 
     @property
     def run_id(self) -> UUID:
+        """所属 AgentRun 的 ID（Executor 用于校验会话归属）。"""
         return self._run_id
 
     def discovered_names(self) -> frozenset[str]:
+        """当前已解锁（经 search_tools 发现）的工具名集合。"""
         return self._discovery.names()
 
     def unlock(self, names: list[str] | frozenset[str] | set[str]) -> frozenset[str]:

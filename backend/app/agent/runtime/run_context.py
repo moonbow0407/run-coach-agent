@@ -8,6 +8,7 @@ from datetime import datetime
 from uuid import UUID
 
 
+# frozen=True：不可变数据类，命令对象在传递途中不允许被篡改
 @dataclass(frozen=True)
 class AgentTurnCommand:
     """驱动一次 AgentRun 的全部可信信息。
@@ -15,11 +16,11 @@ class AgentTurnCommand:
     user_id 来自认证系统；current_input 是本轮用户输入原文。
     """
 
-    user_id: UUID
-    thread_id: UUID
-    turn_id: UUID
-    run_id: UUID
-    request_id: UUID
-    trace_id: UUID
-    timestamp: datetime
-    current_input: str
+    user_id: UUID  # 认证系统给出的用户身份，Runtime 不再自行鉴权
+    thread_id: UUID  # 会话线程
+    turn_id: UUID  # 本轮对话
+    run_id: UUID  # 本次 Agent 推理运行
+    request_id: UUID  # HTTP 请求 ID，事件按此隔离到对应 SSE 连接
+    trace_id: UUID  # 追踪 ID，贯穿日志与执行轨迹
+    timestamp: datetime  # 请求的可信时间基准
+    current_input: str  # 本轮用户输入原文

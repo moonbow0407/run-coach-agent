@@ -19,6 +19,8 @@ EXTRACTOR_PROMPT = """你负责从已提交对话中提取跑者明确表达的�
 
 
 class OpenAISemanticMemoryExtractor:
+    """语义记忆抽取器：用 LLM 从已提交对话中抽取用户明确表达的偏好/约束。"""
+
     def __init__(self, *, client: AsyncOpenAI, model: str) -> None:
         self._client = client
         self._model = model
@@ -31,6 +33,7 @@ class OpenAISemanticMemoryExtractor:
         committed_at: datetime,
         supported_types: tuple[SemanticMemoryType, ...],
     ) -> tuple[ExtractedSemanticCandidate, ...]:
+        """抽取一轮对话中的记忆候选；强制 JSON schema 输出，失败即报错。"""
         schema = _extractor_schema(tuple(item.value for item in supported_types))
         try:
             response = await self._client.chat.completions.create(
@@ -61,22 +64,26 @@ class OpenAISemanticMemoryExtractor:
         except APIError as exc:
             raise InfrastructureError("memory_extraction_failed") from exc
         message = response.choices[0].message if response.choices else None
-        if message is None or not message.content:
+        if message is None or not message.content:  # 模型返回空内容：协议失败
             raise InfrastructureError("memory_extraction_empty_response")
         try:
             payload = json.loads(message.content)
             raw_candidates = payload["candidates"]
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            raise InfrastructureError("memory_extraction_invalid_response") from exc
+            raise InfrastructureError("memory_extraction_invalid_response") from exc  # 非 JSON 或缺字段
         return tuple(_candidate(item, committed_at) for item in raw_candidates)
 
 
 class UnavailableSemanticMemoryExtractor:
+    """未配置外部模型时的显式失败边界；不产出伪造的抽取结果。"""
+
     async def extract(self, **_: object) -> tuple[ExtractedSemanticCandidate, ...]:
         raise InfrastructureError("memory_extractor_not_configured")
 
 
 class UnavailableEpisodeDetector:
+    """未配置外部模型时的显式失败边界；不产出伪造的情节。"""
+
     async def detect(
         self,
         *,
@@ -89,11 +96,12 @@ class UnavailableEpisodeDetector:
 
 
 def _candidate(raw: dict[str, object], committed_at: datetime) -> ExtractedSemanticCandidate:
+    """把 LLM 输出的原始候选规整为领域候选；value 形态不合法直接报错。"""
     valid_until_raw = raw.get("valid_until")
     value = raw["value"]
     if isinstance(value, list):
         value = tuple(value)
-    elif isinstance(value, dict) and set(value) == {"entries"}:
+    elif isinstance(value, dict) and set(value) == {"entries"}:  # 键值对集合形态的 value
         raw_entries = value["entries"]
         if not isinstance(raw_entries, list):
             raise InfrastructureError("memory_extraction_invalid_response")
@@ -120,6 +128,7 @@ def _candidate(raw: dict[str, object], committed_at: datetime) -> ExtractedSeman
 
 
 def _parse_time(raw: object, default: datetime) -> datetime:
+    """解析模型给出的时间；缺省时回落到对话提交时间，必须带时区。"""
     if raw is None:
         return default
     value = datetime.fromisoformat(str(raw))
@@ -129,6 +138,7 @@ def _parse_time(raw: object, default: datetime) -> datetime:
 
 
 def _extractor_schema(types: tuple[str, ...]) -> dict[str, object]:
+    """构造 strict JSON schema：限定 type 枚举与 value 的合法形态。"""
     scalar = {
         "anyOf": [
             {"type": "string"},

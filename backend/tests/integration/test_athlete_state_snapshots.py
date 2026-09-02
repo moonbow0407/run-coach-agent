@@ -29,6 +29,7 @@ from app.infrastructure.seed.vertical_slice import seed_vertical_slice
 def _recompute_service(
     sessions: async_sessionmaker[AsyncSession], clock: FrozenClock
 ) -> AthleteStateRecomputeService:
+    """组装重算服务：UnitOfWork 内含 OutboxWriter，快照与事件在同一事务提交。"""
     return AthleteStateRecomputeService(
         unit_of_work=SqlAlchemyAthleteStateRecomputeUnitOfWork(
             sessions, OutboxWriter()
@@ -42,10 +43,12 @@ async def test_vertical_slice_recompute_appends_v2_high_fair(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：基于 seed 数据重算追加 V2 快照（高疲劳/恢复一般），并在 outbox 落重算事件。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     service = _recompute_service(sessions, clock)
     snapshot = await service.recompute(user_id=seed.user_id, as_of=clock.now())
+    # seed 的反馈全是高 RPE/高疲劳，评估结果应为 HIGH/FAIR。
     assert snapshot.version == 2
     assert snapshot.algorithm_version == "phase3.v1"
     assert snapshot.fatigue_level is FatigueLevel.HIGH
@@ -128,6 +131,7 @@ async def test_same_as_of_identical_assessment_does_not_insert(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：同一 as_of 重复重算幂等——命中相同快照，不新增版本也不重复发事件。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     service = _recompute_service(sessions, clock)
@@ -158,6 +162,7 @@ async def test_older_trigger_is_obsolete_noop(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：更早 as_of 的过期触发是 noop——返回现有快照，不做历史回退。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     service = _recompute_service(sessions, clock)
@@ -174,6 +179,7 @@ async def test_newer_as_of_appends_monotonic_version(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：更晚的 as_of 触发追加新快照，版本号与时间单调递增。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     service = _recompute_service(sessions, clock)
@@ -191,9 +197,11 @@ async def test_concurrent_recompute_does_not_lose_versions(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：并发重算被用户锁串行化，两个请求得到同一快照，不丢版本也不重复插入。"""
     async with short_session(sessions, commit=True) as session:
         seed = await seed_vertical_slice(session)
     service = _recompute_service(sessions, clock)
+    # asyncio.gather：并发原语，同时发起两个重算请求模拟竞争。
     first, second = await asyncio.gather(
         service.recompute(user_id=seed.user_id, as_of=clock.now()),
         service.recompute(user_id=seed.user_id, as_of=clock.now()),
@@ -207,6 +215,7 @@ async def test_query_path_does_not_compute_or_insert(
     sessions: async_sessionmaker[AsyncSession],
     user_id,
 ) -> None:
+    """验证：查询服务纯只读——无数据时返回 None，不触发计算也不落任何快照。"""
     repo = SqlAlchemyAthleteStateRepository(sessions)
     query = AthleteStateQueryService(repo)
     assert await query.get_latest_athlete_state(user_id=user_id) is None
@@ -224,6 +233,7 @@ async def test_snapshot_cross_user_isolation(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
+    """验证：重算只作用于目标用户，另一用户仍停在 seed fixture 的 V1 快照。"""
     async with short_session(sessions, commit=True) as session:
         seed_a = await seed_vertical_slice(session)
         seed_b = await seed_vertical_slice(session)

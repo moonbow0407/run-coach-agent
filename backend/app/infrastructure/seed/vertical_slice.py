@@ -29,10 +29,10 @@ SLICE_NOW = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
 class VerticalSliceSeed:
     """seed 写入结果的句柄：调用方拿这些 ID 做后续断言或关联。"""
 
-    user_id: UUID
-    goal_id: UUID
-    plan_id: UUID
-    workout_ids: tuple[UUID, ...]
+    user_id: UUID  # 演示用户 ID
+    goal_id: UUID  # 备赛目标 ID
+    plan_id: UUID  # 当前 active 计划 ID
+    workout_ids: tuple[UUID, ...]  # 四次训练记录 ID（按时间顺序）
 
 
 async def seed_vertical_slice(

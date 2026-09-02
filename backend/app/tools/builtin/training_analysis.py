@@ -20,6 +20,8 @@ class AnalyzeWorkoutArgs(BaseModel):
 
 
 class AnalyzeTrainingLoadTool:
+    """计算最近两周训练负荷对比；负荷算法在应用服务，工具层不实现。"""
+
     def __init__(self, *, analysis: TrainingAnalysisService) -> None:
         self._analysis = analysis
 
@@ -52,6 +54,8 @@ class AnalyzeTrainingLoadTool:
 
 
 class AnalyzeWorkoutTool:
+    """对单次训练做确定性分析：只用已记录数据，不做推测补全。"""
+
     def __init__(self, *, analysis: TrainingAnalysisService) -> None:
         self._analysis = analysis
 
@@ -81,6 +85,7 @@ class AnalyzeWorkoutTool:
             workout_id=args.workout_id,
             as_of=context.timestamp,
         )
+        # 重新组织结果结构：把心率单独提级，便于模型直接阅读。
         return {
             "workout": analysis.workout,
             "feedback": analysis.feedback,

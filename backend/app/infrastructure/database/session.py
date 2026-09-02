@@ -25,6 +25,7 @@ def create_engine(database_url: str, *, poolclass: type[Pool] | None = None) -> 
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """创建全局共享的 session 工厂；expire_on_commit=False 让提交后对象仍可读。"""
     return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 

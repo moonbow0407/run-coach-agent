@@ -54,14 +54,15 @@ class AgentRuntime:
         trace_recorder: AgentTraceRecorder,
         max_steps: int,
     ) -> None:
-        self._reasoner = reasoner
-        self._assembler = context_assembler
-        self._tool_runtime = tool_runtime
-        self._lifecycle = lifecycle
-        self._trace = trace_recorder
-        self._max_steps = max_steps
+        self._reasoner = reasoner  # 推理器：决定下一步回复还是调工具
+        self._assembler = context_assembler  # 上下文装配器
+        self._tool_runtime = tool_runtime  # 工具运行时：负责 Tool 解析与执行
+        self._lifecycle = lifecycle  # 生命周期事件分发
+        self._trace = trace_recorder  # 执行轨迹记录端口
+        self._max_steps = max_steps  # 单次 Run 的推理步数上限（运行保护）
 
     async def run(self, command: AgentTurnCommand) -> FinalAction:
+        """执行一次完整推理循环，返回最终回答，交由上层提交对话。"""
         await self._lifecycle.publish(
             ContextAssemblyStarted(
                 request_id=command.request_id,
@@ -70,6 +71,7 @@ class AgentRuntime:
                 run_id=command.run_id,
             )
         )
+        # 装配本轮完整上下文：热上下文 + 已提交历史 + 长期记忆
         bundle = await self._assembler.assemble(
             ContextAssemblyRequest(
                 user_id=command.user_id,
@@ -91,12 +93,14 @@ class AgentRuntime:
         # 每个 AgentRun 一个 ToolSession：Run-local Discovery 不跨 Turn 复用，
         # Run 结束后随局部变量直接销毁。
         session = self._tool_runtime.create_session(run_id=command.run_id)
-        state = ReasoningState()
+        state = ReasoningState()  # Run 内工作状态：工具调用与结果的交互序列
         step_index = 0
         while True:
+            # 运行保护：步数超限说明模型可能在无限循环调工具，强制失败
             if step_index >= self._max_steps:
                 raise AgentRuntimeError("超过系统运行保护步数")
             try:
+                # 主动让出控制权，使取消信号能在此检查点生效
                 await asyncio.sleep(0)
             except asyncio.CancelledError as exc:
                 raise TurnCancelled("AgentRun 已取消") from exc
@@ -137,10 +141,12 @@ class AgentRuntime:
             step_index += 1
 
             if isinstance(action, FinalAction):
+                # 推理结束：最终回答交回 ChatService 提交对话
                 await self._trace.record_final(run_id=command.run_id, action=action)
                 return action
 
             if not isinstance(action, ToolCallAction):
+                # 防御分支：未来新增 Action 类型未接入循环时尽早失败
                 raise AgentRuntimeError(f"未知 Action 类型: {type(action)!r}")
 
             # 内部 UUID call_id 服务 ToolExecutionContext / Lifecycle / RunStep；

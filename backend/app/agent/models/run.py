@@ -13,29 +13,30 @@ from uuid import UUID
 
 
 class AgentRunStatus(StrEnum):
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    RUNNING = "running"  # 推理运行进行中
+    COMPLETED = "completed"  # 正常完成并产出最终回答
+    FAILED = "failed"  # 执行失败
+    CANCELLED = "cancelled"  # 被取消
 
 
 class RunStepKind(StrEnum):
-    REASONING = "reasoning"
-    TOOL_CALL = "tool_call"
-    OBSERVATION = "observation"
-    FINAL = "final"
+    REASONING = "reasoning"  # 一次推理：模型决定下一步动作
+    TOOL_CALL = "tool_call"  # 发起一次工具调用
+    OBSERVATION = "observation"  # 工具返回结果
+    FINAL = "final"  # 产出给用户的最终回答
 
 
+# frozen=True：不可变数据类，Run / RunStep 落库后即成历史记录，不允许修改
 @dataclass(frozen=True)
 class AgentRun:
     """一次 Agent 执行。与 Turn 一一对应：Turn 是对话视角，Run 是执行视角。"""
 
     id: UUID
-    turn_id: UUID
-    user_id: UUID
-    status: AgentRunStatus
-    started_at: datetime
-    completed_at: datetime | None
+    turn_id: UUID  # 对应的对话轮次（Turn 看对话，Run 看执行）
+    user_id: UUID  # 归属用户
+    status: AgentRunStatus  # 执行状态
+    started_at: datetime  # 开始时间
+    completed_at: datetime | None  # 结束时间，仅终态后有值
 
 
 @dataclass(frozen=True)
@@ -43,11 +44,11 @@ class RunStep:
     """持久化 Execution Trace。不能被当作 AgentRuntime 的工作状态。"""
 
     id: UUID
-    run_id: UUID
-    index: int
-    kind: RunStepKind
-    call_id: UUID | None
-    input_data: dict[str, Any] | None
-    output_data: dict[str, Any] | None
-    started_at: datetime
-    completed_at: datetime | None
+    run_id: UUID  # 所属 AgentRun
+    index: int  # 步骤序号，标识执行顺序
+    kind: RunStepKind  # 步骤类型
+    call_id: UUID | None  # 工具调用内部 ID（仅工具相关步骤有值）
+    input_data: dict[str, Any] | None  # 该步输入快照
+    output_data: dict[str, Any] | None  # 该步输出快照
+    started_at: datetime  # 开始时间
+    completed_at: datetime | None  # 结束时间，进行中的步骤为 None

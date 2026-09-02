@@ -29,11 +29,11 @@ from app.infrastructure.database.session import short_session
 class DemoSeed:
     """演示数据句柄；包含人工 E2E 所需的用户与状态版本。"""
 
-    user_id: UUID
-    goal_id: UUID
-    plan_id: UUID
-    workout_ids: tuple[UUID, ...]
-    athlete_state_version: int
+    user_id: UUID  # 演示用户 ID
+    goal_id: UUID  # 备赛目标（45 天后的半程马拉松）
+    plan_id: UUID  # 当前 active 的训练计划
+    workout_ids: tuple[UUID, ...]  # 预置的三次历史训练
+    athlete_state_version: int  # 初始跑者状态快照版本号
 
 
 async def seed_demo(
@@ -85,6 +85,7 @@ async def seed_demo(
             )
         )
         await session.flush()
+        # 预置未来 1/2/4 天的三次计划课次（轻松/节奏/间歇）
         for days_from_anchor, session_type, title, prescription in (
             (1, "easy", "恢复轻松跑", {"distance_m": 7000, "pace": "5:50-6:10"}),
             (2, "tempo", "本周节奏跑", {"distance_m": 9000, "pace": "5:10"}),
@@ -102,6 +103,7 @@ async def seed_demo(
             )
 
     workout_ids: list[UUID] = []
+    # 预置过去 6/3/1 天的三次真实训练（轻松/节奏/间歇），负荷逐次上升
     for days_ago, workout_type, duration_s, distance_m in (
         (6, WorkoutType.EASY, 2700, 7500.0),
         (3, WorkoutType.TEMPO, 3000, 9500.0),
@@ -122,6 +124,7 @@ async def seed_demo(
         )
         workout_ids.append(workout.id)
 
+    # 对最近一次间歇课提交高强度主观反馈，制造“疲劳积累”场景
     await workout_feedback_command_service.record(
         user_id=user_id,
         workout_id=workout_ids[-1],

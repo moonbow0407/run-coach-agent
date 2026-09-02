@@ -37,6 +37,8 @@ from app.memory.ports.repositories import (
 
 
 class SqlAlchemyMemoryRepository:
+    """长期记忆仓储：投影落库（幂等）、相似检索与过期处理都在用户行锁内完成。"""
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
@@ -55,10 +57,11 @@ class SqlAlchemyMemoryRepository:
         embedding_version: str,
         now: datetime,
     ) -> ProjectionResult:
+        """语义记忆投影落库：同一投影键下按输入指纹幂等。"""
         if len(candidates) != len(embeddings):
             raise ValueError("candidate_embedding_count_mismatch")
         async with short_session(self._sessions, commit=True) as session:
-            await lock_user_row(session, user_id)
+            await lock_user_row(session, user_id)  # 同一用户的投影串行化
             receipt = await self._get_receipt(
                 session,
                 user_id=user_id,
@@ -71,6 +74,7 @@ class SqlAlchemyMemoryRepository:
                 and receipt.status == "completed"
                 and receipt.input_fingerprint == input_fingerprint
             ):
+                # 已有完全相同输入的成功回执：直接重放结果，不重复写入
                 return ProjectionResult(
                     projection_key=projection_key,
                     result_ids=tuple(
@@ -125,7 +129,8 @@ class SqlAlchemyMemoryRepository:
         projector_version: str,
         now: datetime,
     ) -> UUID:
-        live_same = await session.scalar(
+        """合并一条候选记忆：同断言只补证据提置信；同槽位的新断言取代旧 active。"""
+        live_same = await session.scalar(  # 查找同断言哈希的存活记录（candidate/active）
             select(SemanticMemoryRow).where(
                 SemanticMemoryRow.user_id == user_id,
                 SemanticMemoryRow.assertion_hash == candidate.assertion_hash,
@@ -133,18 +138,19 @@ class SqlAlchemyMemoryRepository:
             )
         )
         if live_same is not None and live_same.origin == candidate.origin.value:
+            # 同一断言再次出现：只追加证据并按独立证据组重算置信度
             await self._add_memory_evidence(session, live_same.id, user_id, candidate, now)
             if live_same.status == SemanticMemoryStatus.CANDIDATE.value:
                 groups = await self._primary_group_count(session, live_same.id)
                 confidence = min(0.90, 0.40 + 0.15 * groups)
                 live_same.confidence = confidence
-                if confidence >= 0.70:
+                if confidence >= 0.70:  # 置信度达标：候选转正为 active
                     live_same.status = SemanticMemoryStatus.ACTIVE.value
                     live_same.activated_at = now
             live_same.updated_at = now
             return live_same.id
 
-        active = await session.scalar(
+        active = await session.scalar(  # 查找同一记忆槽位（type+subject_key）的 active 记录
             select(SemanticMemoryRow).where(
                 SemanticMemoryRow.user_id == user_id,
                 SemanticMemoryRow.type == candidate.type.value,
@@ -158,6 +164,7 @@ class SqlAlchemyMemoryRepository:
         superseded_active: SemanticMemoryRow | None = None
         if active is not None:
             if candidate_precedes_active(candidate, _semantic_from_row(active)):
+                # 新断言更有信息量：旧 active 被新版本取代
                 active.status = SemanticMemoryStatus.SUPERSEDED.value
                 active.superseded_by_id = None
                 active.superseded_at = now
@@ -166,6 +173,7 @@ class SqlAlchemyMemoryRepository:
                 await session.flush()
                 superseded_active = active
             else:
+                # 旧 active 仍占优：新候选直接以 superseded 落库，指向胜者
                 status = SemanticMemoryStatus.SUPERSEDED
                 superseded_by_id = active.id
 
@@ -210,6 +218,7 @@ class SqlAlchemyMemoryRepository:
         candidate: SemanticMemoryCandidate,
         now: datetime,
     ) -> None:
+        """为记忆去重追加证据行（同一来源+角色只记一次）。"""
         existing = {
             (row.source_type, row.source_id, row.role)
             for row in (
@@ -240,6 +249,7 @@ class SqlAlchemyMemoryRepository:
         await session.flush()
 
     async def _primary_group_count(self, session: AsyncSession, memory_id: UUID) -> int:
+        """统计独立 primary 证据组数：组数越多，推断置信度越高。"""
         rows = (
             await session.scalars(
                 select(MemoryEvidenceRow.evidence_group_key).where(
@@ -265,6 +275,7 @@ class SqlAlchemyMemoryRepository:
         embedding_version: str,
         now: datetime,
     ) -> ProjectionResult:
+        """情节投影落库：按 logical_key 增量合并情节，幂等语义同语义记忆。"""
         async with short_session(self._sessions, commit=True) as session:
             await lock_user_row(session, user_id)
             receipt = await self._get_receipt(
@@ -292,6 +303,7 @@ class SqlAlchemyMemoryRepository:
                 and _source_identities(input_checkpoint)
                 < _source_identities(receipt.input_checkpoint)
             ):
+                # 本次输入覆盖的来源少于回执时的来源：输入已过时，仅记重放
                 return ProjectionResult(
                     projection_key=projection_key,
                     result_ids=tuple(
@@ -304,7 +316,7 @@ class SqlAlchemyMemoryRepository:
             if candidate is not None:
                 if embedding is None:
                     raise ValueError("episode_embedding_required")
-                row = await session.scalar(
+                row = await session.scalar(  # 按 (user, type, logical_key) 找已有情节
                     select(EpisodeRow).where(
                         EpisodeRow.user_id == user_id,
                         EpisodeRow.type == candidate.type.value,
@@ -312,6 +324,7 @@ class SqlAlchemyMemoryRepository:
                     )
                 )
                 if row is None:
+                    # 首次见到该逻辑身份：新建情节
                     row = EpisodeRow(
                         id=new_id(),
                         user_id=user_id,
@@ -336,6 +349,7 @@ class SqlAlchemyMemoryRepository:
                     session.add(row)
                     await session.flush()
                 elif row.status != EpisodeStatus.SUPERSEDED.value:
+                    # 已有情节未废弃：增量合并（时间区间取并集，摘要/重要度取最新）
                     row.summary = candidate.summary
                     row.started_at = min(row.started_at, candidate.started_at)
                     row.ended_at = max(row.ended_at, candidate.ended_at)
@@ -373,6 +387,7 @@ class SqlAlchemyMemoryRepository:
         candidate: EpisodeCandidate,
         now: datetime,
     ) -> None:
+        """为情节去重追加证据行（同一来源+角色只记一次）。"""
         existing = {
             (row.source_type, row.source_id, row.role)
             for row in (
@@ -407,6 +422,7 @@ class SqlAlchemyMemoryRepository:
         projector_version: str,
         projection_key: str,
     ) -> MemoryProjectionRunRow | None:
+        """按投影身份（user+projector+key）读取已有回执。"""
         return await session.scalar(
             select(MemoryProjectionRunRow).where(
                 MemoryProjectionRunRow.user_id == user_id,
@@ -430,6 +446,7 @@ class SqlAlchemyMemoryRepository:
         result_ids: list[UUID],
         now: datetime,
     ) -> None:
+        """写投影回执：首次创建或覆盖旧回执，记录指纹与结果供幂等重放。"""
         summary = {"ids": [str(value) for value in result_ids]}
         if receipt is None:
             session.add(
@@ -458,6 +475,7 @@ class SqlAlchemyMemoryRepository:
             receipt.completed_at = now
 
     async def has_retrievable(self, *, user_id: UUID, as_of: datetime) -> bool:
+        """用户在 as_of 时点是否至少有一条可检索的记忆（语义或情节）。"""
         semantic = select(SemanticMemoryRow.id).where(
             SemanticMemoryRow.user_id == user_id,
             SemanticMemoryRow.activated_at.is_not(None),
@@ -487,6 +505,7 @@ class SqlAlchemyMemoryRepository:
         query_embedding: tuple[float, ...],
         limit: int,
     ) -> tuple[RankedSemanticCandidate, ...]:
+        """按查询向量余弦相似度检索该时点仍有效的语义记忆。"""
         distance = SemanticMemoryRow.embedding.cosine_distance(list(query_embedding))
         stmt = (
             select(SemanticMemoryRow, distance.label("distance"))
@@ -520,6 +539,7 @@ class SqlAlchemyMemoryRepository:
         query_embedding: tuple[float, ...],
         limit: int,
     ) -> tuple[RankedEpisodeCandidate, ...]:
+        """按查询向量余弦相似度检索该时点已完成的情节。"""
         distance = EpisodeRow.embedding.cosine_distance(list(query_embedding))
         stmt = (
             select(EpisodeRow, distance.label("distance"))
@@ -541,6 +561,7 @@ class SqlAlchemyMemoryRepository:
         )
 
     async def expire_due(self, *, user_id: UUID, as_of: datetime) -> int:
+        """把有效期已过的 active 语义记忆批量置为 expired，返回受影响条数。"""
         stmt = (
             update(SemanticMemoryRow)
             .where(
@@ -557,6 +578,7 @@ class SqlAlchemyMemoryRepository:
 
 
 def _semantic_from_row(row: SemanticMemoryRow) -> SemanticMemory:
+    """语义记忆 Row -> 领域对象（枚举与向量在此还原）。"""
     value = tuple(row.value) if isinstance(row.value, list) else row.value
     return SemanticMemory(
         id=row.id,
@@ -587,6 +609,7 @@ def _semantic_from_row(row: SemanticMemoryRow) -> SemanticMemory:
 
 
 def _episode_from_row(row: EpisodeRow) -> Episode:
+    """情节 Row -> 领域对象（枚举与向量在此还原）。"""
     return Episode(
         id=row.id,
         user_id=row.user_id,
@@ -611,6 +634,7 @@ def _episode_from_row(row: EpisodeRow) -> Episode:
 
 
 def _source_identities(checkpoint: dict[str, object]) -> set[tuple[str, str]]:
+    """从检查点提取（来源类型, 来源 ID）集合，用于判断输入新旧。"""
     sources = checkpoint.get("sources")
     if not isinstance(sources, list):
         return set()

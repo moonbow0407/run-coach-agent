@@ -28,4 +28,4 @@ def json_ready(value: Any) -> Any:
         return json_ready(value.model_dump())
     if hasattr(value, "__dataclass_fields__"):
         return json_ready(vars(value))
-    return str(value)
+    return str(value)  # 兜底：未知类型转字符串，保证序列化不中断

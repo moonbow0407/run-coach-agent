@@ -17,6 +17,8 @@ class ProposePlanAdaptationArgs(BaseModel):
 
 
 class ProposePlanAdaptationTool:
+    """提出降负荷调整草案：只创建 DRAFT 变更，激活仍需用户确认流程。"""
+
     def __init__(self, *, adaptation: PlanAdaptationService) -> None:
         self._adaptation = adaptation
 
@@ -43,6 +45,7 @@ class ProposePlanAdaptationTool:
     async def execute(
         self, *, args: ProposePlanAdaptationArgs, context: ToolExecutionContext
     ) -> object:
+        """委托应用服务创建降负荷草案，并回传变更与"比赛未被改动"标记。"""
         change, race_unmodified = await self._adaptation.propose_reduce_upcoming_load(
             user_id=context.user_id,
             turn_id=context.turn_id,
@@ -53,7 +56,9 @@ class ProposePlanAdaptationTool:
             horizon_days=args.horizon_days,
             reason=args.reason,
         )
+        # 返回草案内容并显式声明 Active Plan 未被改动（DRAFT 风险等级的语义）。
         result: dict[str, object] = {"plan_change": change, "active_plan_unchanged": True}
         if race_unmodified:
+            # 比赛课次未被触碰时单独标注，避免模型误以为比赛被调整。
             result["race_session_not_modified"] = True
         return result

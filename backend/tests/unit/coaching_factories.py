@@ -13,14 +13,14 @@ from app.coaching.domain.workout.models import (
 
 def make_workout(
     *,
-    started_at: datetime,
-    duration_s: int | None = 3600,
-    distance_m: float | None = 8000.0,
-    workout_type: WorkoutType = WorkoutType.EASY,
+    started_at: datetime,  # 开课时间（必填，用于锚定时间窗）
+    duration_s: int | None = 3600,  # 时长秒，默认 1 小时
+    distance_m: float | None = 8000.0,  # 距离米，默认 8 公里
+    workout_type: WorkoutType = WorkoutType.EASY,  # 课型，默认轻松跑
     workout_id=None,
     user_id=None,
-    avg_heart_rate: int | None = 140,
-    max_heart_rate: int | None = 160,
+    avg_heart_rate: int | None = 140,  # 平均心率（bpm）
+    max_heart_rate: int | None = 160,  # 最大心率（bpm）
 ) -> Workout:
     now = started_at
     return Workout(
@@ -42,11 +42,11 @@ def make_feedback(
     *,
     workout_id,
     user_id=None,
-    perceived_exertion: int | None = None,
-    subjective_fatigue: int | None = None,
-    soreness: int | None = None,
-    note: str | None = None,
-    created_at: datetime | None = None,
+    perceived_exertion: int | None = None,  # sRPE：主观用力程度（1-10）
+    subjective_fatigue: int | None = None,  # 主观疲劳（1-10）
+    soreness: int | None = None,  # 酸痛程度（1-10）
+    note: str | None = None,  # 用户文字备注
+    created_at: datetime | None = None,  # 反馈创建时间：决定是否计入 as_of 前的窗口
 ) -> WorkoutFeedback:
     moment = created_at or datetime(2026, 8, 27, 8, 0, tzinfo=UTC)
     return WorkoutFeedback(

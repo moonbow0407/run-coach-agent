@@ -10,6 +10,7 @@ from app.agent.models.action import AgentAction
 from app.agent.reasoning.models import ReasoningContext
 
 
+# Protocol（结构化鸭子类型）：只约束方法签名，实现方无需显式继承本类
 class Reasoner(Protocol):
     """给定上下文与已发生的交互，决定下一步 Action（调用能力或给出最终回答）。"""
 

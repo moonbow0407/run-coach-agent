@@ -24,6 +24,7 @@ async def test_coaching_read_bodies_with_seed(
     slice_seed,
     slice_auth_header,
 ) -> None:
+    """验证：seed 用户的各只读端点返回与训练台数据一致的 body（目标/计划/状态/课次/反馈）。"""
     app = make_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         goal = await client.get("/api/v1/goals/active", headers=slice_auth_header)
@@ -83,6 +84,7 @@ async def test_coaching_read_bodies_with_seed(
 
 @pytest.mark.asyncio
 async def test_coaching_read_rejects_invalid_days(make_app, slice_auth_header) -> None:
+    """验证：days 参数越界（0/366）或非数字一律 422，杜绝异常窗口查询。"""
     app = make_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         for days in ("0", "366", "abc"):
@@ -109,6 +111,7 @@ async def test_coaching_read_empty_states_and_auth_isolation(
 
 @pytest.mark.asyncio
 async def test_coaching_read_requires_auth(make_app) -> None:
+    """验证：所有只读路由未带 JWT 一律 401，查询能力不对匿名开放。"""
     app = make_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         for route in (*READ_ROUTES, "/api/v1/workouts?days=30"):

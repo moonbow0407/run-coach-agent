@@ -1,4 +1,7 @@
-"""OpenAI-compatible Embedding adapter。"""
+"""OpenAI-compatible Embedding adapter。
+
+把文本转成固定维度向量，供记忆相似检索使用。
+"""
 
 from openai import APIError, AsyncOpenAI
 
@@ -7,6 +10,8 @@ from app.memory.ports.embedding import EmbeddingBatch
 
 
 class OpenAIEmbeddingProvider:
+    """文本向量化适配器：调用 embedding 模型产出与配置一致的向量批次。"""
+
     def __init__(
         self,
         *,
@@ -21,7 +26,8 @@ class OpenAIEmbeddingProvider:
         self._dimensions = dimensions
 
     async def embed(self, texts: tuple[str, ...]) -> EmbeddingBatch:
-        if not texts:
+        """批量向量化文本；输入与产出的条数、维度必须严格一致。"""
+        if not texts:  # 空输入：不调用外部服务，直接返回空批次
             return EmbeddingBatch((), self._model, self._version, self._dimensions)
         try:
             response = await self._client.embeddings.create(
@@ -31,9 +37,10 @@ class OpenAIEmbeddingProvider:
             )
         except APIError as exc:
             raise InfrastructureError("memory_embedding_failed") from exc
-        ordered = sorted(response.data, key=lambda item: item.index)
+        ordered = sorted(response.data, key=lambda item: item.index)  # 按 index 还原输入顺序
         vectors = tuple(tuple(float(value) for value in item.embedding) for item in ordered)
         if len(vectors) != len(texts) or any(len(vector) != self._dimensions for vector in vectors):
+            # 条数或维度不符说明模型契约被破坏，fail fast
             raise InfrastructureError("memory_embedding_contract_mismatch")
         return EmbeddingBatch(vectors, self._model, self._version, self._dimensions)
 

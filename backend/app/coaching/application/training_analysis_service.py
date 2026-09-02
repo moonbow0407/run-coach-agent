@@ -54,6 +54,8 @@ def analyze_training_load_evidence(
 
 
 class TrainingAnalysisService:
+    """面向查询侧的训练分析服务：读仓储证据并委托纯领域函数计算。"""
+
     def __init__(self, workouts: WorkoutRepository, plans: PlanRepository) -> None:
         self._workouts = workouts
         self._plans = plans
@@ -64,6 +66,8 @@ class TrainingAnalysisService:
         user_id: UUID,
         as_of: datetime,
     ) -> TrainingLoadAnalysis:
+        """读取最近两个 7 日窗的训练与反馈，计算负荷分析。"""
+        # 一次拉取覆盖两个窗口的完整时间范围，窗口切分交给领域函数。
         start = as_of - timedelta(days=CURRENT_WINDOW_DAYS + PREVIOUS_WINDOW_DAYS)
         workouts = await self._workouts.list_between(
             user_id=user_id,
@@ -71,6 +75,7 @@ class TrainingAnalysisService:
             end=as_of,
             limit=ANALYSIS_WORKOUT_LIMIT,
         )
+        # 反馈读取上界就是 as_of：未来报告不允许污染历史分析。
         feedback = await self._workouts.list_feedback_for_workouts(
             user_id=user_id,
             workout_ids=[workout.id for workout in workouts],
@@ -89,7 +94,9 @@ class TrainingAnalysisService:
         workout_id: UUID,
         as_of: datetime,
     ) -> WorkoutAnalysis:
+        """分析单次训练：sRPE 负荷、质量课标记与同日计划课次上下文。"""
         workout = await self._workouts.get(user_id=user_id, workout_id=workout_id)
+        # 训练不存在，或它发生在 as_of 之后（未来事实），都视为查不到。
         if workout is None or workout.started_at > as_of:
             raise NotFoundError("训练记录不存在")
         feedbacks = await self._workouts.list_feedback_for_workouts(
@@ -97,9 +104,11 @@ class TrainingAnalysisService:
             workout_ids=[workout_id],
             end=as_of,
         )
+        # 取 as_of 时点最新一条反馈；sRPE 只认 perceived_exertion。
         feedback = max(feedbacks, key=lambda item: item.created_at) if feedbacks else None
         rpe = feedback.perceived_exertion if feedback is not None else None
         same_day = ()
+        # 同日计划课次只是上下文提示，不影响负荷数值。
         plan = await self._plans.get_active(user_id=user_id)
         if plan is not None:
             sessions = await self._plans.list_sessions(user_id=user_id, plan_id=plan.id)

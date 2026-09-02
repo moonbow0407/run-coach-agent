@@ -1,6 +1,8 @@
+"""Athlete State 领域模型：跑者状态快照与疲劳 / 恢复等级。"""
+
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
+from enum import StrEnum  # StrEnum：成员值即字符串，可直接序列化存储
 from uuid import UUID
 
 from app.coaching.domain.athlete.signals import AthleteStateSignal
@@ -9,7 +11,7 @@ from app.coaching.domain.athlete.signals import AthleteStateSignal
 class FatigueLevel(StrEnum):
     LOW = "low"
     MODERATE = "moderate"
-    HIGH = "high"
+    HIGH = "high"  # 高疲劳：触发降负荷调整的必要前提之一
 
 
 class RecoveryLevel(StrEnum):
@@ -18,10 +20,11 @@ class RecoveryLevel(StrEnum):
     GOOD = "good"
 
 
+# 当前评估算法版本标识；写入每份快照，供重算幂等判断。
 ALGORITHM_VERSION_V1 = "phase3.v1"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True)  # 不可变数据类：快照只追加新版本，不原地修改
 class AthleteStateSnapshot:
     """系统结合事实证据推导出的跑者状态快照。
 
@@ -30,15 +33,15 @@ class AthleteStateSnapshot:
     """
 
     id: UUID
-    user_id: UUID
-    version: int
-    as_of: datetime
-    fatigue_level: FatigueLevel | None
-    recovery_level: RecoveryLevel | None
-    recent_training_load: float | None
-    workout_completion_rate: float | None
-    training_load_coverage: float | None
-    signals: tuple[AthleteStateSignal, ...]
-    confidence: float | None
-    algorithm_version: str
-    created_at: datetime
+    user_id: UUID  # 归属用户，仓储层必须按此隔离数据
+    version: int  # 单调递增的快照版本号，用于提案与激活的新鲜度校验
+    as_of: datetime  # 状态投影基准时间：只汇总此时间点之前的证据
+    fatigue_level: FatigueLevel | None  # 推导出的疲劳等级；证据不足为 None
+    recovery_level: RecoveryLevel | None  # 推导出的恢复等级；证据不足为 None
+    recent_training_load: float | None  # 当前 7 日窗可用 sRPE 负荷
+    workout_completion_rate: float | None  # 计划完成率（Phase 3 恒为 None）
+    training_load_coverage: float | None  # 当前窗 sRPE 覆盖率
+    signals: tuple[AthleteStateSignal, ...]  # 可解释依据：结论来自哪些证据
+    confidence: float | None  # 结论置信度 0.2–1.0
+    algorithm_version: str  # 评估算法版本，如 phase3.v1
+    created_at: datetime  # 快照写入时间
