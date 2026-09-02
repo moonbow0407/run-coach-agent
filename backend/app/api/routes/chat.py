@@ -5,13 +5,15 @@
     请求 → 鉴权依赖 get_request_context 解析出可信 RequestContext
          → ChatService.send_message 编排一轮对话（建 Turn → 运行 Agent → 提交）
          → /chat 一次性返回最终回答；/chat/stream 通过 SSE 逐步推送执行进度
+           与流式正文增量（response.delta）
 
 本层不实现业务规则，失败时只做“应用异常 → HTTP 状态码”的映射。
 """
 
 import asyncio
 import logging
-from typing import Annotated, Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -39,6 +41,9 @@ from app.identity.application.request_context import RequestContext
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# SSE 空闲保活间隔（秒）：超过该时长没有任何事件就发注释帧，防止代理层超时
+_SSE_KEEPALIVE_SECONDS = 15.0
 
 
 def _chat_service(request: Request) -> ChatService:
@@ -122,11 +127,22 @@ async def chat_stream(
                 if queue.empty():
                     # 队列暂时为空：同时等待“下一个事件到达”和“整个任务结束”，
                     # 谁先完成就走谁——事件继续转发，任务结束则收尾。
+                    # 超时用于空闲保活：qwen 类推理模型思考阶段可能 30 秒以上
+                    # 不产生任何正文增量，静默连接会被代理层提前掐断。
                     queue_task = asyncio.create_task(queue.get())
                     done, _ = await asyncio.wait(
                         {task, queue_task},
                         return_when=asyncio.FIRST_COMPLETED,
+                        timeout=_SSE_KEEPALIVE_SECONDS,
                     )
+                    if not done:
+                        # 保活：SSE 注释帧（无 data 行）对前端解析器不可见，
+                        # 但能让中间层确认连接仍然存活。
+                        queue_task.cancel()
+                        await asyncio.gather(queue_task, return_exceptions=True)
+                        queue_task = None
+                        yield ": keepalive\n\n"
+                        continue
                     if queue_task in done:
                         event = queue_task.result()
                         queue_task = None
@@ -156,10 +172,9 @@ async def chat_stream(
                             )
                             yield format_sse("run.failed", {"error": "请求执行失败"})
                         else:
-                            yield format_sse(
-                                "response.delta",
-                                {"content": result.content},
-                            )
+                            # 任务成功但没等到 TurnCommitted 事件（理论上不应发生）。
+                            # 该路径本来就没有增量可推：不补发正文帧，避免与已推送的
+                            # ResponseDelta 重复；只补终态帧让前端能收尾重拉历史。
                             yield format_sse(
                                 "run.completed",
                                 {
@@ -175,9 +190,10 @@ async def chat_stream(
 
                 mapped = map_lifecycle_event(event)
                 if isinstance(event, TurnCommitted):
-                    # TurnCommitted 只代表对话已提交，回答内容要等后台任务返回。
-                    result = await task
-                    yield format_sse("response.delta", {"content": result.content})
+                    # 正文增量已在此之前经 ResponseDelta 逐帧推送完毕（FIFO 保证
+                    # 先于本帧到达）；这里收割后台任务异常防止 "exception never
+                    # retrieved"，run.completed 的 ids 直接取自事件本身。
+                    await asyncio.gather(task, return_exceptions=True)
                     if mapped:
                         yield format_sse(*mapped)
                     break

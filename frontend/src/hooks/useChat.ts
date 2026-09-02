@@ -5,7 +5,7 @@
  *
  * 一轮运行的可视化状态机：
  *   idle → sending → reasoning →(tool.started/completed 追加轨迹)→
- *   response.delta 落正文 → run.completed / run.failed / run.cancelled
+ *   response.delta 逐片段累积正文 → run.completed / run.failed / run.cancelled
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -26,10 +26,11 @@ export interface LiveRun {
   phase: RunPhase;
   traces: ToolTrace[];
   content: string;
+  stepIndex: number; // 当前正文所属的推理步；跨步意味着缓冲要清空重积
   error: string | null;
 }
 
-const IDLE_RUN: LiveRun = { phase: "idle", traces: [], content: "", error: null };
+const IDLE_RUN: LiveRun = { phase: "idle", traces: [], content: "", stepIndex: 0, error: null };
 
 export function useChat(
   enabled: boolean,
@@ -82,7 +83,7 @@ export function useChat(
         ...prev,
         { id: `local-${Date.now()}`, role: "user", content, created_at: new Date().toISOString() },
       ]);
-      setRun({ phase: "sending", traces: [], content: "", error: null });
+      setRun({ phase: "sending", traces: [], content: "", stepIndex: 0, error: null });
 
       const handle = (event: StreamEvent) => {
         setRun((prev) => {
@@ -103,7 +104,17 @@ export function useChat(
                 ),
               };
             case "response.delta":
-              return { ...prev, phase: "responding", content: prev.content + event.content };
+              return {
+                ...prev,
+                phase: "responding",
+                // 逐片段打字机累积；step_index 变化说明上一段是工具步骤的
+                // 附带文本（不落库），清空缓冲重新累积最终回答。
+                content:
+                  prev.stepIndex === event.stepIndex
+                    ? prev.content + event.content
+                    : event.content,
+                stepIndex: event.stepIndex,
+              };
             case "run.completed":
               return { ...prev, phase: "idle" };
             case "run.failed":

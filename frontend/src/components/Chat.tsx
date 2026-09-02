@@ -2,8 +2,8 @@
 
 /**
  * 对话流：教练回复时展示执行轨迹（调阅了哪些数据、耗时多少），
- * 让 Agent 的每一步可追溯，而不是黑盒等待。正文来自 response.delta，
- * 是 Turn 提交后的完整内容。
+ * 让 Agent 的每一步可追溯，而不是黑盒等待。正文来自 response.delta
+ * 流式增量（随模型生成逐片段推送，打字机效果）。
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -79,10 +79,23 @@ export function Chat({
 }) {
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  // 流式正文每个增量都会触发本 effect：用 rAF 合并滚动请求，
+  // 一帧最多滚一次，避免逐 token 平滑滚动造成的抖动。
+  const scrollRafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    });
   }, [messages.length, run.phase, run.content, run.traces.length]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
+    };
+  }, []);
 
   const busy = run.phase !== "idle" && run.phase !== "failed";
   const showRun = busy || run.error !== null;

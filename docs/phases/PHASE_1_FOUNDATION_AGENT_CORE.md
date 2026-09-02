@@ -1750,6 +1750,11 @@ response.delta
 run.completed
 ```
 
+`response.delta` 是流式正文增量：由 `ResponseDelta` 生命周期事件承载，
+随模型生成逐片段推送（载荷含 `step_index`），不是 Turn 提交后一次性发出
+的完整正文。它不是 canonical 内容，增量聚合结果必须与 commit_turn 落库的
+助手正文一致（集成测试守卫此契约）。
+
 也就是说：
 
 ```text

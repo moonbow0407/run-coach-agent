@@ -19,7 +19,9 @@ class FakeProvider:
         self._response = response
         self.requests: list[ModelRequest] = []
 
-    async def generate(self, request: ModelRequest) -> ModelResponse:
+    async def generate(
+        self, request: ModelRequest, on_text_delta: object | None = None
+    ) -> ModelResponse:
         self.requests.append(request)
         return self._response
 

@@ -199,12 +199,13 @@ ContextAssemblyStarted
 ContextAssembled
 ReasoningStarted
 ReasoningCompleted
+ResponseDelta
 ToolStarted
 ToolCompleted
 TurnCommitStarted
 ```
 
-它们表达执行进度、SSE、日志或 trace，不代表需要异步投影的 canonical business fact。
+它们表达执行进度、SSE、日志或 trace，不代表需要异步投影的 canonical business fact。其中 `ResponseDelta` 是流式正文增量，频次高且携带用户可见内容：日志侧只允许记步序与片段长度（不记正文），且绝不进入 Outbox。
 
 Phase 5 v1 durable events：
 

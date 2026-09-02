@@ -6,6 +6,9 @@ import type { NextConfig } from "next";
 const backendOrigin = process.env.BACKEND_ORIGIN ?? "http://localhost:8000";
 
 const nextConfig: NextConfig = {
+  // SSE（/api/v1/chat/stream）依赖逐帧到达的打字机效果；Next 内置的
+  // 响应压缩会把流缓冲进 zlib，导致事件攒到最后一次性到达，必须关闭。
+  compress: false,
   async rewrites() {
     return [
       {

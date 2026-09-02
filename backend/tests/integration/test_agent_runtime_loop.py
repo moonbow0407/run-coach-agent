@@ -3,6 +3,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.lifecycle.events import ResponseDelta
 from app.agent.models.action import FinalAction, ToolCallAction
 from app.agent.models.observation import Observation
 from app.agent.reasoning.scripted import ScriptedReasoner
@@ -54,6 +55,13 @@ async def test_runtime_reason_act_observe_final_and_call_id_pairing(
     assert "TurnFailed" not in types
     # 全链路 trace_id 贯穿：所有事件都属于这一次请求。
     assert all(event.trace_id == context.trace_id for event in events)
+
+    # 流式正文增量：只有最终回答那一步推文本（step_index 与循环下标一致），
+    # 工具调用步不产生任何 delta，避免附带文本混入用户可见内容。
+    deltas = [event for event in events if isinstance(event, ResponseDelta)]
+    assert [(d.step_index, d.delta) for d in deltas] == [
+        (1, "最近四次训练都完成了。")
+    ]
 
     steps = await load_run_steps(sessions, result.run_id)
     kinds = [step.kind for step in steps]

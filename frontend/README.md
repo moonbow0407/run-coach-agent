@@ -52,4 +52,4 @@ npm run dev                              # http://localhost:3000
 | GET | `/api/v1/plan-changes/pending` |
 | GET/POST | `/api/v1/plan-changes/{id}`、`/confirm`、`/reject` |
 
-SSE 事件口径见 `backend/app/api/sse.py`：`run.started / reasoning.started / tool.started / tool.completed / response.delta / run.completed / run.failed / run.cancelled`。注意 `response.delta` 是 Turn 提交后一次性发出的完整正文，不是逐 token 流。
+SSE 事件口径见 `backend/app/api/sse.py`：`run.started / reasoning.started / tool.started / tool.completed / response.delta / run.completed / run.failed / run.cancelled`。`response.delta` 是流式正文增量，随模型生成逐片段推送（打字机效果），载荷含 `step_index`：跨推理步时应清空缓冲重新累积（工具步骤的附带文本不落库）。

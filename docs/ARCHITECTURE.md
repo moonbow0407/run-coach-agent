@@ -1759,6 +1759,12 @@ ToolCallAction
 FinalAction
 ```
 
+Reasoner 还接受一个可选的 `on_text_delta` 回调：流式实现（LLMReasoner）在模型
+产出最终回答文本时逐片段调用，Runtime 把每个片段发布为 `ResponseDelta`
+生命周期事件。回调是可选副作用通道，不是第二种返回值——Action 仍只在完整
+响应聚合完成后产生；非流式实现忽略该参数即可。供应商思考过程增量（如
+reasoning_content）不属于正文，由 Provider 丢弃，不进入该通道。
+
 供应商 native tool calling 协议封装在 LLM Provider Adapter 内。Reasoner 不访问 Registry、Search、Executor、Application Service 或 Repository。
 
 这样 Runtime 可以使用：
@@ -2652,6 +2658,8 @@ AgentRuntime
 ```
 
 Tool 执行进度映射为 `tool.started` / `tool.completed`；不新增 ToolDiscovered 事件，Discovery 以 Tool Call / Observation Trace 为详细记录。ToolRuntime 不直接发送 SSE。
+
+流式正文增量映射为 `response.delta`（由 `ResponseDelta` 事件承载）。该事件是执行进度而非状态跃迁：不改变 Turn / Run 状态，仅进程内发布、永不进 Outbox，也不是 canonical 内容——对话正文以 commit_turn 落库的助手消息为唯一权威来源。SSE 上的增量聚合结果必须与落库正文一致（集成测试守卫此契约）。
 
 这样未来可以让同一 Lifecycle 同时驱动：
 

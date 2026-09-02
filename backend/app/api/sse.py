@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from app.agent.lifecycle.events import (
     LifecycleEvent,
     ReasoningStarted,
+    ResponseDelta,
     ToolCompleted,
     ToolStarted,
     TurnCancelled,
@@ -34,6 +35,12 @@ def map_lifecycle_event(event: LifecycleEvent) -> tuple[str, dict[str, object]] 
         return "reasoning.started", {
             "turn_id": str(event.turn_id),
             "run_id": str(event.run_id),
+            "step_index": event.step_index,
+        }
+    if isinstance(event, ResponseDelta):
+        # 流式正文增量；step_index 供前端跨推理步切换缓冲（兜底用）
+        return "response.delta", {
+            "content": event.delta,
             "step_index": event.step_index,
         }
     if isinstance(event, ToolStarted):

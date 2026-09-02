@@ -68,6 +68,21 @@ class ReasoningCompleted(LifecycleEvent):
 
 
 @dataclass(frozen=True)
+class ResponseDelta(LifecycleEvent):
+    """模型文本增量：流式产出最终回答过程中的一个片段。
+
+    是执行进度而非状态跃迁：不改变 Turn / Run 状态，也永不进 Outbox；
+    对外正文以 commit_turn 落库的助手消息为唯一 canonical 来源。
+    仅由 AgentRuntime 发布。
+    """
+
+    turn_id: UUID
+    run_id: UUID
+    step_index: int  # 产生本增量的推理步序号；前端跨步时以此切换缓冲
+    delta: str  # 文本片段（用户可见内容，日志侧只允许记长度）
+
+
+@dataclass(frozen=True)
 class ToolStarted(LifecycleEvent):
     """一次工具调用开始。call_id 是内部 Trace UUID（与模型协议 ID 分离）。"""
 
@@ -142,6 +157,7 @@ AgentExecutionLifecycleEvent = (
     | ContextAssembled
     | ReasoningStarted
     | ReasoningCompleted
+    | ResponseDelta
     | ToolStarted
     | ToolCompleted
 )

@@ -335,7 +335,7 @@ def build_container(
 class _MissingLLMReasoner:
     """未配置 LLM 时的占位实现：一旦被调用立即报错，不伪造推理结果。"""
 
-    async def reason(self, context: object) -> object:
+    async def reason(self, context: object, on_text_delta: object | None = None) -> object:
         raise ReasonerError("未配置 LLM_API_KEY，无法使用 LLMReasoner")
 
 

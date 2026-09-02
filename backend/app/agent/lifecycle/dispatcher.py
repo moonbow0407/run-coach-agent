@@ -7,7 +7,11 @@ import logging
 from collections.abc import Awaitable, Callable
 from inspect import isawaitable
 
-from app.agent.lifecycle.events import LifecycleEvent, event_as_log_fields
+from app.agent.lifecycle.events import (
+    LifecycleEvent,
+    ResponseDelta,
+    event_as_log_fields,
+)
 
 # 监听器：同步或 async 可调用对象，收到事件后执行副作用（如 SSE 推送）
 LifecycleListener = Callable[[LifecycleEvent], Awaitable[None] | None]
@@ -32,7 +36,7 @@ class LifecycleDispatcher:
 
     async def publish(self, event: LifecycleEvent) -> None:
         """发布关键执行事件，listener 失败会中止当前执行。"""
-        logger.info(type(event).__name__, extra=event_as_log_fields(event))
+        _log_event(event)
         for listener in list(self._listeners):
             result = listener(event)
             # 兼容同步 / 异步监听器：只有返回 awaitable 才等待
@@ -41,7 +45,7 @@ class LifecycleDispatcher:
 
     async def publish_after_commit(self, event: LifecycleEvent) -> None:
         """发布已持久化终态事件，listener 失败不得改变业务结果。"""
-        logger.info(type(event).__name__, extra=event_as_log_fields(event))
+        _log_event(event)
         for listener in list(self._listeners):
             try:
                 result = listener(event)
@@ -53,3 +57,18 @@ class LifecycleDispatcher:
                     "lifecycle.listener.failed",
                     extra=event_as_log_fields(event),
                 )
+
+
+def _log_event(event: LifecycleEvent) -> None:
+    """把事件写进结构化日志；ResponseDelta 高频且含用户正文，需单独脱敏。"""
+    if isinstance(event, ResponseDelta):
+        # 增量正文绝不进日志（与 Phase 5「日志不记 message content」同一原则）：
+        # 只在 DEBUG 级别记录步序与片段长度，便于排查而不泄露内容。
+        logger.debug(
+            "ResponseDelta step=%s len=%s",
+            event.step_index,
+            len(event.delta),
+            extra={"request_id": str(event.request_id)},
+        )
+        return
+    logger.info(type(event).__name__, extra=event_as_log_fields(event))

@@ -12,6 +12,7 @@ from app.agent.lifecycle.events import ToolCompleted, TurnCancelled, TurnStarted
 from app.agent.models.action import FinalAction, ToolCallAction
 from app.agent.models.turn import TurnStatus
 from app.agent.reasoning.models import ReasoningContext
+from app.agent.reasoning.reasoner import TextDeltaListener
 from app.agent.reasoning.scripted import ScriptedReasoner
 from app.common.errors import TurnCancelled as TurnCancelledError
 from app.tools.context import ToolExecutionContext
@@ -28,7 +29,9 @@ from tests.helpers import (
 class SlowReasoner:
     """极慢的假推理器：睡 30 秒才出结果，为「取消」留出操作窗口。"""
 
-    async def reason(self, context: ReasoningContext) -> FinalAction:
+    async def reason(
+        self, context: ReasoningContext, on_text_delta: TextDeltaListener | None = None
+    ) -> FinalAction:
         await asyncio.sleep(30)
         return FinalAction(content="不应该返回")
 

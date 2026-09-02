@@ -23,11 +23,17 @@ class FakeNativeProvider:
         # 记录收到的每次模型请求，供断言检查实际下发的 Schema 与消息。
         self.requests: list[ModelRequest] = []
 
-    async def generate(self, request: ModelRequest) -> ModelResponse:
+    async def generate(
+        self, request: ModelRequest, on_text_delta: object | None = None
+    ) -> ModelResponse:
         self.requests.append(request)
         if not self._responses:
             raise AssertionError("FakeNativeProvider 脚本已用尽")
-        return self._responses.pop(0)
+        response = self._responses.pop(0)
+        # 与真实流式 Provider 对齐：纯文本最终回复经增量通道整段推送一次
+        if on_text_delta is not None and response.text and not response.tool_calls:
+            await on_text_delta(response.text)
+        return response
 
 
 def _tool_call_response(call_id: str, tool: str, arguments: dict) -> ModelResponse:

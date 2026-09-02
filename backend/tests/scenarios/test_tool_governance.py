@@ -240,7 +240,7 @@ async def test_session_run_id_mismatch_fails_agent_run(
         def __init__(self) -> None:
             self.count = 0
 
-        async def reason(self, context):
+        async def reason(self, context, on_text_delta=None):
             self.count += 1
             if self.count == 1:
                 return ToolCallAction(

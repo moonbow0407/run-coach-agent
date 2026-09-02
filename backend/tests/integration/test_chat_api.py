@@ -1,12 +1,15 @@
 """聊天 HTTP 边界：对话消息入库、会话线程归属隔离、SSE 流式生命周期与失败兜底。"""
 
 import asyncio
-from uuid import uuid4
+import json
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.agent.models.action import FinalAction
+from app.agent.reasoning.llm_reasoner import LLMReasoner
+from app.agent.reasoning.prompt_renderer import PromptRenderer
 from app.agent.reasoning.scripted import ScriptedReasoner
 from app.common.clock import FrozenClock
 from app.common.errors import RunCoachError
@@ -14,7 +17,27 @@ from app.common.ids import new_id
 from app.infrastructure.config import Settings
 from app.infrastructure.database.models.user import UserRow
 from app.infrastructure.database.session import short_session
+from app.infrastructure.llm.provider import OpenAICompatibleProvider
 from tests.conftest import token_for
+from tests.helpers import load_turn_messages
+
+
+def _parse_sse_frames(body: str) -> list[tuple[str, dict]]:
+    """把 SSE 字节流解析成（事件名, 载荷）帧序列，分帧规则与前端 sse.ts 一致。"""
+    frames: list[tuple[str, dict]] = []
+    for block in body.split("\n\n"):
+        if not block.strip():
+            continue
+        event_name: str | None = None
+        payload: dict = {}
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                event_name = line[len("event: "):]
+            elif line.startswith("data: "):
+                payload = json.loads(line[len("data: "):])
+        if event_name is not None:
+            frames.append((event_name, payload))
+    return frames
 
 
 @pytest.mark.asyncio
@@ -98,10 +121,11 @@ async def test_other_user_cannot_read_thread(
 async def test_chat_sse_emits_lifecycle_events(
     make_app,
     auth_header,
+    sessions,
 ) -> None:
-    """验证：SSE 流式接口按序输出 run.started→reasoning→response.delta→run.completed 事件及最终回复。"""
+    """验证：SSE 按序输出生命周期事件；正文增量逐帧先于 run.completed，且拼接等于落库助手正文。"""
     app = make_app(reasoner=ScriptedReasoner([FinalAction(content="流式完成")]))
-    # client.stream + aread：读取 SSE（Server-Sent Events）完整字节流后断言事件文本。
+    # client.stream + aread：读取 SSE（Server-Sent Events）完整字节流后按帧断言。
     async with (
         AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
         client.stream(
@@ -113,11 +137,107 @@ async def test_chat_sse_emits_lifecycle_events(
     ):
         assert response.status_code == 200
         body = (await response.aread()).decode()
-    assert "event: run.started" in body
-    assert "event: reasoning.started" in body
-    assert "event: response.delta" in body
-    assert "流式完成" in body
-    assert "event: run.completed" in body
+
+    frames = _parse_sse_frames(body)
+    names = [name for name, _ in frames]
+    assert names[0] == "run.started"
+    assert "reasoning.started" in names
+    assert names[-1] == "run.completed"
+
+    # 正文增量帧必须全部先于 run.completed（终态之后前端不再接受增量）。
+    delta_frames = [payload for name, payload in frames if name == "response.delta"]
+    assert delta_frames, "流式接口必须产生正文增量帧"
+    completed_index = names.index("run.completed")
+    assert all(
+        index < completed_index
+        for index, name in enumerate(names)
+        if name == "response.delta"
+    )
+    # 增量来自最终回答步骤：step_index 与循环下标一致。
+    assert all(payload["step_index"] == 0 for payload in delta_frames)
+    # 关键契约：最后一个 step 的增量拼接 == commit_turn 落库的助手正文。
+    delta_text = "".join(payload["content"] for payload in delta_frames)
+    assert delta_text == "流式完成"
+    turn_id = UUID(frames[-1][1]["turn_id"])
+    messages = await load_turn_messages(sessions, turn_id)
+    assistant = [message for message in messages if message.role == "assistant"]
+    assert len(assistant) == 1
+    assert assistant[0].content == delta_text
+
+
+class _FakeStreamChunk:
+    """流式 chunk 替身：只携带 content 增量，字段名对齐 OpenAI 协议。"""
+
+    def __init__(self, content: str) -> None:
+        self.choices = [type("Choice", (), {"delta": type("Delta", (), {"content": content, "tool_calls": None})()})()]
+        self.model = "fake-stream-model"
+
+
+class _FakeStream:
+    """异步流替身：支持 async with / async for，逐个回放文本片段。"""
+
+    def __init__(self, fragments: list[str]) -> None:
+        self._fragments = list(fragments)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc) -> bool:
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._fragments:
+            raise StopAsyncIteration
+        return _FakeStreamChunk(self._fragments.pop(0))
+
+
+class _FakeStreamClient:
+    """OpenAI client 流式替身：chat.completions.create 必须以 stream=True 调用。"""
+
+    def __init__(self, fragments: list[str]) -> None:
+        self._stream = _FakeStream(fragments)
+        self.chat = type("Chat", (), {"completions": self})()
+
+    async def create(self, **kwargs):
+        assert kwargs.get("stream") is True, "生产路径应始终走流式请求"
+        return self._stream
+
+
+@pytest.mark.asyncio
+async def test_chat_sse_streams_real_provider_token_deltas(
+    make_app,
+    auth_header,
+    sessions,
+) -> None:
+    """端到端流式切片：真 Provider 聚合 + LLMReasoner + /chat/stream，多帧小增量且拼接等于落库正文。"""
+    provider = OpenAICompatibleProvider(
+        client=_FakeStreamClient(["正在", "流式", "回复"]),  # type: ignore[arg-type]
+        model="fake-stream-model",
+    )
+    app = make_app(reasoner=LLMReasoner(provider, PromptRenderer()))
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+        client.stream(
+            "POST",
+            "/api/v1/chat/stream",
+            json={"message": "hello"},
+            headers=auth_header,
+        ) as response,
+    ):
+        body = (await response.aread()).decode()
+
+    frames = _parse_sse_frames(body)
+    delta_frames = [payload for name, payload in frames if name == "response.delta"]
+    # 每个 chunk 一帧：前端视角是逐段打字机，而非一次性全文。
+    assert [payload["content"] for payload in delta_frames] == ["正在", "流式", "回复"]
+    delta_text = "".join(payload["content"] for payload in delta_frames)
+    turn_id = UUID(frames[-1][1]["turn_id"])
+    messages = await load_turn_messages(sessions, turn_id)
+    assistant = [message for message in messages if message.role == "assistant"]
+    assert assistant[0].content == delta_text == "正在流式回复"
 
 
 @pytest.mark.asyncio

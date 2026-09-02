@@ -25,6 +25,7 @@ from app.agent.lifecycle.events import (
     ContextAssemblyStarted,
     ReasoningCompleted,
     ReasoningStarted,
+    ResponseDelta,
     ToolCompleted,
     ToolStarted,
 )
@@ -117,12 +118,28 @@ class AgentRuntime:
                     step_index=step_index,
                 )
             )
+            # 文本增量回调：流式产出最终回答时逐片段经生命周期总线转发给
+            # SSE 等监听方；仅进程内事件，不持久化。闭包按步新建，并用默认
+            # 参数绑定当前步序，避免读到循环后续步的 step_index。
+            async def on_text_delta(delta: str, step: int = step_index) -> None:
+                await self._lifecycle.publish(
+                    ResponseDelta(
+                        request_id=command.request_id,
+                        trace_id=command.trace_id,
+                        turn_id=command.turn_id,
+                        run_id=command.run_id,
+                        step_index=step,
+                        delta=delta,
+                    )
+                )
+
             action = await self._reasoner.reason(
                 ReasoningContext(
                     context_bundle=bundle,
                     state=state,
                     visible_tools=visible_tools,
-                )
+                ),
+                on_text_delta=on_text_delta,
             )
             await self._trace.record_reasoning(
                 run_id=command.run_id,

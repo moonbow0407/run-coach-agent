@@ -3,8 +3,8 @@
  *
  * EventSource 无法携带 Authorization 头，这里用 fetch + ReadableStream
  * 手工解析 `event: <名>\\ndata: <json>\\n\\n` 帧（与 backend/app/api/sse.py
- * 的格式对应）。注意 response.delta 是 Turn 提交后一次性发出的完整正文，
- * 不是逐 token 流。
+ * 的格式对应）。response.delta 是流式正文增量：随模型生成逐片段推送，
+ * step_index 标识产生增量的推理步，跨步时应清空缓冲重新累积。
  */
 
 import { ApiError, UnauthorizedError } from "@/lib/api";
@@ -23,7 +23,7 @@ export type StreamEvent =
   | { type: "reasoning.started" }
   | { type: "tool.started"; trace: ToolTrace }
   | { type: "tool.completed"; trace: ToolTrace }
-  | { type: "response.delta"; content: string }
+  | { type: "response.delta"; content: string; stepIndex: number }
   | { type: "run.completed" }
   | { type: "run.failed"; error: string }
   | { type: "run.cancelled" };
@@ -37,6 +37,7 @@ interface WireFrame {
   status?: string;
   duration_ms?: number;
   content?: string;
+  step_index?: number;
   message_id?: string;
   error?: string;
 }
@@ -76,7 +77,11 @@ function translate(event: string, data: WireFrame): StreamEvent | null {
           }
         : null;
     case "response.delta":
-      return { type: "response.delta", content: data.content ?? "" };
+      return {
+        type: "response.delta",
+        content: data.content ?? "",
+        stepIndex: data.step_index ?? 0,
+      };
     case "run.completed":
       return { type: "run.completed" };
     case "run.failed":

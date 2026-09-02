@@ -8,6 +8,7 @@ native 响应归一化为单 Action（Phase 2 单 Action 语义）。
 from app.agent.models.action import AgentAction, FinalAction, ToolCallAction
 from app.agent.reasoning.models import ReasoningContext
 from app.agent.reasoning.prompt_renderer import PromptRenderer
+from app.agent.reasoning.reasoner import TextDeltaListener
 from app.common.errors import ReasonerError
 from app.infrastructure.llm.provider import LLMProvider
 
@@ -19,14 +20,22 @@ class LLMReasoner:
         self._provider = provider
         self._renderer = renderer
 
-    async def reason(self, context: ReasoningContext) -> AgentAction:
-        """渲染上下文为 native 请求，调用模型并归一化为单个 Action。"""
+    async def reason(
+        self,
+        context: ReasoningContext,
+        on_text_delta: TextDeltaListener | None = None,
+    ) -> AgentAction:
+        """渲染上下文为 native 请求，调用模型并归一化为单个 Action。
+
+        on_text_delta 原样透传给 Provider：是否流式、增量如何外推都是
+        Provider 的协议细节，本类只面向聚合完成的 ModelResponse 做判定。
+        """
         # 把上下文 + 已发生交互 + 当前可见 Tool 渲染成完整模型请求
         request = self._renderer.render(
             context.context_bundle, context.state, context.visible_tools
         )
         # 供应商协议细节由 Provider 隔离，这里只面向归一化后的响应
-        response = await self._provider.generate(request)
+        response = await self._provider.generate(request, on_text_delta)
 
         if len(response.tool_calls) > 1:
             # 单 Action 语义：不选第一个、不并行执行，明确失败。
