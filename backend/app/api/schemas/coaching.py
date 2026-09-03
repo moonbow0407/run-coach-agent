@@ -9,7 +9,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.schemas.plan_changes import PlannedSessionResponse
 
@@ -126,3 +126,14 @@ class WorkoutFeedbackResponse(BaseModel):
     soreness: int | None  # 酸痛评分
     note: str | None  # 用户备注
     created_at: datetime  # 反馈提交时间
+
+
+class WorkoutFeedbackSubmitRequest(BaseModel):
+    """提交训练主观反馈的请求体。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    perceived_exertion: int | None = Field(default=None, ge=1, le=10)  # sRPE 主观用力程度（1–10）
+    subjective_fatigue: int | None = Field(default=None, ge=1, le=10)  # 主观疲劳自评（1–10）
+    soreness: int | None = Field(default=None, ge=1, le=10)  # 酸痛自评（1–10）
+    note: str | None = None  # 用户自由备注

@@ -44,6 +44,7 @@ export function useChat(
   // 同一轮运行期间可能重复触发 onRunCompleted 的保护由调用方决定，这里只保证回调最新。
   const completedRef = useRef(onRunCompleted);
   completedRef.current = onRunCompleted;
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -67,7 +68,18 @@ export function useChat(
       });
   }, [enabled]);
 
+  const cancel = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }, []);
+
   const startNewThread = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     window.localStorage.removeItem("run-coach.thread-id");
     setThreadId(null);
     setMessages([]);
@@ -84,6 +96,9 @@ export function useChat(
         { id: `local-${Date.now()}`, role: "user", content, created_at: new Date().toISOString() },
       ]);
       setRun({ phase: "sending", traces: [], content: "", stepIndex: 0, error: null });
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
       const handle = (event: StreamEvent) => {
         setRun((prev) => {
@@ -132,7 +147,7 @@ export function useChat(
       };
 
       try {
-        await streamChat(content, threadId, handle);
+        await streamChat(content, threadId, handle, controller.signal);
         // 流正常结束且已提交：重取历史，把本地乐观消息换成落库消息。
         const current = loadThreadId();
         if (current) {
@@ -142,6 +157,14 @@ export function useChat(
           setMessages(data.messages);
         }
       } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          setRun((prev) => ({
+            ...prev,
+            phase: "failed",
+            error: "你已停止了教练的回复",
+          }));
+          return;
+        }
         if (error instanceof UnauthorizedError) {
           onUnauthorized();
           return;
@@ -152,11 +175,12 @@ export function useChat(
           error: error instanceof Error ? error.message : "连接教练失败",
         }));
       } finally {
+        abortControllerRef.current = null;
         setRun((prev) => (prev.phase === "failed" ? prev : IDLE_RUN));
       }
     },
     [run.phase, threadId, onUnauthorized],
   );
 
-  return { threadId, messages, run, historyError, send, startNewThread };
+  return { threadId, messages, run, historyError, send, cancel, startNewThread };
 }

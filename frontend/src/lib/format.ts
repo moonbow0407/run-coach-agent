@@ -10,8 +10,10 @@ export function formatDistance(meters: number | null): string {
 
 export function formatDuration(seconds: number | null): string {
   if (seconds === null) return "—";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.round((seconds % 3600) / 60);
+  // 将秒按四舍五入折算为总分钟，确保满 60 分钟正确进位到小时
+  const totalMinutes = Math.round(seconds / 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
   if (h === 0) return `${m} min`;
   return `${h}:${String(m).padStart(2, "0")} h`;
 }

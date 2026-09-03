@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 
-import { ApiError, apiGet } from "@/lib/api";
+import { ApiError, apiGet, apiPost } from "@/lib/api";
 import {
   SESSION_NAME,
   formatDateTime,
@@ -38,27 +38,169 @@ function RpeScale({ label, value }: { label: string; value: number | null }) {
   );
 }
 
-function WorkoutRow({ workout }: { workout: Workout }) {
+function ScaleSelector({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (val: number) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist">{label}</p>
+        <span className="font-mono text-xs font-semibold text-asphalt">{value} / 10</span>
+      </div>
+      <div className="mt-1 flex gap-1">
+        {RPE_STEPS.map((step) => (
+          <button
+            key={step}
+            type="button"
+            onClick={() => onChange(step)}
+            className={`flex-1 rounded py-1 text-center font-mono text-xs transition-colors ${
+              step === value
+                ? "bg-asphalt font-semibold text-paper"
+                : "bg-fog text-mist hover:bg-hairline"
+            }`}
+          >
+            {step}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FeedbackForm({
+  workoutId,
+  initialFeedback,
+  onSaved,
+  onCancel,
+}: {
+  workoutId: string;
+  initialFeedback?: WorkoutFeedback | null;
+  onSaved: (feedback: WorkoutFeedback) => void;
+  onCancel?: () => void;
+}) {
+  const [rpe, setRpe] = useState<number>(initialFeedback?.perceived_exertion ?? 5);
+  const [fatigue, setFatigue] = useState<number>(initialFeedback?.subjective_fatigue ?? 4);
+  const [soreness, setSoreness] = useState<number>(initialFeedback?.soreness ?? 3);
+  const [note, setNote] = useState<string>(initialFeedback?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await apiPost<WorkoutFeedback>(
+        `/api/v1/workouts/${workoutId}/feedback`,
+        {
+          perceived_exertion: rpe,
+          subjective_fatigue: fatigue,
+          soreness: soreness,
+          note: note.trim() || null,
+        },
+      );
+      onSaved(saved);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存反馈失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3 rounded-lg border border-hairline bg-fog p-3.5">
+      <div className="flex items-center justify-between">
+        <p className="font-mono text-xs font-semibold uppercase tracking-wider text-asphalt">
+          记录主观反馈
+        </p>
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="font-mono text-xs text-mist hover:text-asphalt"
+          >
+            取消
+          </button>
+        ) : null}
+      </div>
+
+      <ScaleSelector label="自觉用力程度 (RPE)" value={rpe} onChange={setRpe} />
+      <ScaleSelector label="主观疲劳程度" value={fatigue} onChange={setFatigue} />
+      <ScaleSelector label="肌肉酸痛程度" value={soreness} onChange={setSoreness} />
+
+      <div>
+        <label className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist">
+          备注心得（选填）
+        </label>
+        <input
+          type="text"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="如：最后两公里心率漂移、双腿轻快…"
+          className="mt-1 w-full rounded border border-hairline bg-paper px-2.5 py-1.5 text-xs text-asphalt outline-none focus:border-asphalt"
+        />
+      </div>
+
+      {error ? <p className="text-xs text-track-deep">{error}</p> : null}
+
+      <div className="flex justify-end pt-1">
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded-md bg-asphalt px-3 py-1.5 font-mono text-xs font-medium text-paper transition-colors hover:bg-asphalt/85 disabled:opacity-50"
+        >
+          {saving ? "保存中…" : "保存反馈"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function WorkoutRow({
+  workout,
+  onFeedbackSaved,
+}: {
+  workout: Workout;
+  onFeedbackSaved?: (feedback: WorkoutFeedback) => void;
+}) {
   const [feedback, setFeedback] = useState<WorkoutFeedback | null>(null);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const fetchFeedback = async () => {
+    setError(null);
+    try {
+      setFeedback(
+        await apiGet<WorkoutFeedback>(`/api/v1/workouts/${workout.id}/feedback`),
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setFeedback(null); // 没写过反馈：展开区显示提示与打分按钮。
+      } else {
+        setError(err instanceof Error ? err.message : "无法读取反馈");
+      }
+    }
+  };
 
   const toggle = async () => {
     const next = !open;
     setOpen(next);
-    if (next && feedback === null && error === null) {
-      try {
-        setFeedback(
-          await apiGet<WorkoutFeedback>(`/api/v1/workouts/${workout.id}/feedback`),
-        );
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 404) {
-          setFeedback(null); // 没写过反馈：展开区显示提示。
-        } else {
-          setError(err instanceof Error ? err.message : "无法读取反馈");
-        }
-      }
+    if (next && feedback === null) {
+      await fetchFeedback();
     }
+  };
+
+  const handleSaved = (newFeedback: WorkoutFeedback) => {
+    setFeedback(newFeedback);
+    setEditing(false);
+    onFeedbackSaved?.(newFeedback);
   };
 
   return (
@@ -87,9 +229,37 @@ function WorkoutRow({ workout }: { workout: Workout }) {
       {open ? (
         <div className="px-1 pb-3.5">
           {error ? (
-            <p className="text-sm text-track-deep">{error}</p>
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-track-wash px-3 py-2">
+              <p className="text-sm text-track-deep">{error}</p>
+              <button
+                type="button"
+                onClick={() => void fetchFeedback()}
+                className="font-mono text-xs font-medium text-track-deep underline underline-offset-4"
+              >
+                重试加载
+              </button>
+            </div>
+          ) : editing || (feedback === null && !error) ? (
+            <FeedbackForm
+              workoutId={workout.id}
+              initialFeedback={feedback}
+              onSaved={handleSaved}
+              onCancel={feedback ? () => setEditing(false) : undefined}
+            />
           ) : feedback ? (
             <div className="space-y-3 rounded-lg bg-fog p-3">
+              <div className="flex items-center justify-between">
+                <p className="font-mono text-[11px] uppercase tracking-wider text-mist">
+                  主观反馈记录
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  className="font-mono text-xs text-mist underline underline-offset-2 hover:text-asphalt"
+                >
+                  修改
+                </button>
+              </div>
               <div className="grid grid-cols-3 gap-3">
                 <RpeScale label="用力程度 RPE" value={feedback.perceived_exertion} />
                 <RpeScale label="主观疲劳" value={feedback.subjective_fatigue} />
@@ -99,22 +269,29 @@ function WorkoutRow({ workout }: { workout: Workout }) {
                 <p className="text-sm leading-relaxed text-asphalt">「{feedback.note}」</p>
               ) : null}
             </div>
-          ) : (
-            <p className="text-sm text-mist">这次训练还没有主观反馈。</p>
-          )}
+          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-export function WorkoutList({ workouts }: { workouts: Workout[] | null }) {
+export function WorkoutList({
+  workouts,
+  onFeedbackSaved,
+}: {
+  workouts: Workout[] | null;
+  onFeedbackSaved?: (feedback: WorkoutFeedback) => void;
+}) {
   return (
     <section className="rounded-xl border border-hairline bg-paper p-4">
       <Eyebrow>最近 30 天训练</Eyebrow>
       <div className="mt-2">
         {workouts === null ? (
-          <EmptyState title="教练还没有评估过你的状态" />
+          <EmptyState
+            title="暂无训练记录"
+            hint="记录一次训练后，教练就能结合实际表现给你建议。"
+          />
         ) : workouts.length === 0 ? (
           <EmptyState
             title="最近 30 天没有训练记录"
@@ -123,7 +300,11 @@ export function WorkoutList({ workouts }: { workouts: Workout[] | null }) {
         ) : (
           <div className="divide-y divide-hairline">
             {workouts.map((workout) => (
-              <WorkoutRow key={workout.id} workout={workout} />
+              <WorkoutRow
+                key={workout.id}
+                workout={workout}
+                onFeedbackSaved={onFeedbackSaved}
+              />
             ))}
           </div>
         )}

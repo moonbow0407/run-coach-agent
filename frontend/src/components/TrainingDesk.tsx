@@ -41,7 +41,10 @@ export function TrainingDesk({
         onDecided={data.reloadAfterDecision}
         onRefresh={() => void data.reload()}
       />
-      <WorkoutList workouts={data.workouts?.workouts ?? null} />
+      <WorkoutList
+        workouts={data.workouts?.workouts ?? null}
+        onFeedbackSaved={() => void data.reloadAfterRun()}
+      />
     </div>
   );
 
@@ -96,6 +99,8 @@ export function TrainingDesk({
             run={chat.run}
             historyError={chat.historyError}
             onSend={chat.send}
+            onCancel={chat.cancel}
+            onNewThread={chat.startNewThread}
           />
         </div>
         <aside className={`${view === "desk" ? "" : "hidden"} md:block`}>{desk}</aside>

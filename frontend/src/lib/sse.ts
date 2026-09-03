@@ -118,11 +118,12 @@ function parseChunk(buffer: string): { events: Array<{ event: string; data: Wire
   return { events, rest };
 }
 
-/** 发送消息并逐事件回调。resolve 于流正常结束；HTTP/鉴权错误直接抛出。 */
+/** 发送消息并逐事件回调。resolve 于流正常结束；支持通过 AbortSignal 中断。 */
 export async function streamChat(
   message: string,
   threadId: string | null,
   onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const token = loadToken();
   const response = await fetch("/api/v1/chat/stream", {
@@ -133,6 +134,7 @@ export async function streamChat(
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ thread_id: threadId, message }),
+    signal,
   });
 
   if (response.status === 401) {

@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 
 import { checkBackendHealth } from "@/lib/api";
-import { tokenUserId } from "@/lib/token";
+import { saveToken, tokenUserId } from "@/lib/token";
 import { Eyebrow } from "@/components/ui";
 
 export function TokenGate({ onConnected }: { onConnected: (token: string) => void }) {
@@ -32,7 +32,7 @@ export function TokenGate({ onConnected }: { onConnected: (token: string) => voi
       setError("这不是有效的访问令牌，请重新签发");
       return;
     }
-    window.localStorage.setItem("run-coach.token", token);
+    saveToken(token);
     onConnected(token);
   };
 

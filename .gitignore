@@ -20,6 +20,7 @@ dist/
 # 前端依赖与构建产物
 node_modules/
 .next/
+*.tsbuildinfo
 
 # 操作系统与编辑器临时文件
 .idea/
@@ -28,3 +29,4 @@ Thumbs.db
 *.swp
 *~
 .zcode/
+.workbuddy/

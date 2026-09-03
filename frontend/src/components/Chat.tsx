@@ -4,13 +4,15 @@
  * 对话流：教练回复时展示执行轨迹（调阅了哪些数据、耗时多少），
  * 让 Agent 的每一步可追溯，而不是黑盒等待。正文来自 response.delta
  * 流式增量（随模型生成逐片段推送，打字机效果）。
+ * 支持 Markdown 结构化渲染、智能跟随吸底、打断生成与换新话题。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { LiveRun } from "@/hooks/useChat";
 import type { ThreadMessage } from "@/lib/types";
 import { Eyebrow } from "@/components/ui";
+import { Markdown } from "@/components/Markdown";
 
 const TOOL_LABELS: Record<string, string> = {
   search_tools: "查找可用能力",
@@ -53,9 +55,9 @@ function CoachRun({ run }: { run: LiveRun }) {
         ) : null}
       </ul>
       {run.content ? (
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-asphalt">
-          {run.content}
-        </p>
+        <div className="mt-2 text-sm leading-relaxed text-asphalt">
+          <Markdown content={run.content} />
+        </div>
       ) : null}
       {run.error ? (
         <p className="mt-2 text-sm leading-relaxed text-track-deep">
@@ -71,19 +73,45 @@ export function Chat({
   run,
   historyError,
   onSend,
+  onCancel,
+  onNewThread,
 }: {
   messages: ThreadMessage[];
   run: LiveRun;
   historyError: string | null;
   onSend: (text: string) => Promise<void>;
+  onCancel: () => void;
+  onNewThread: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  // 流式正文每个增量都会触发本 effect：用 rAF 合并滚动请求，
-  // 一帧最多滚一次，避免逐 token 平滑滚动造成的抖动。
+  // 用户是否向上查阅；为 true 时不强行滚底抢夺视线
+  const isUserScrolledUpRef = useRef(false);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
   const scrollRafRef = useRef<number | null>(null);
 
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const scrolledUp = distanceFromBottom > 90;
+    isUserScrolledUpRef.current = scrolledUp;
+    setShowScrollBottomBtn(scrolledUp);
+  }, []);
+
+  const scrollToBottom = useCallback((smooth = false) => {
+    isUserScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
+    bottomRef.current?.scrollIntoView({
+      behavior: smooth ? "smooth" : "auto",
+      block: "end",
+    });
+  }, []);
+
   useEffect(() => {
+    // 若用户正在往上查阅历史，不自动拉到底部
+    if (isUserScrolledUpRef.current) return;
     if (scrollRafRef.current !== null) return;
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
@@ -103,16 +131,34 @@ export function Chat({
     const text = draft.trim();
     if (!text || busy) return;
     setDraft("");
+    // 发送新消息时自动切回跟随
+    isUserScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
     void onSend(text);
   };
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col">
-      <div className="px-5 pt-4">
+    <section className="relative flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between px-5 pt-4">
         <Eyebrow>与教练对话</Eyebrow>
+        {messages.length > 0 ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onNewThread}
+            className="font-mono text-[11px] uppercase tracking-wider text-mist transition-colors hover:text-asphalt disabled:opacity-40"
+            title="清空当前消息并开启新对话"
+          >
+            + 开启新话题
+          </button>
+        ) : null}
       </div>
 
-      <div className="thin-scroll mt-3 flex-1 space-y-3 overflow-y-auto px-5 pb-2">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="thin-scroll mt-3 flex-1 space-y-3 overflow-y-auto px-5 pb-2"
+      >
         {historyError ? (
           <p className="rounded-lg border border-track/40 bg-track-wash px-4 py-3 text-sm text-track-deep">
             {historyError}
@@ -136,9 +182,7 @@ export function Chat({
             </div>
           ) : (
             <div key={message.id} className="max-w-[92%] rounded-lg border border-hairline bg-paper px-4 py-3">
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-asphalt">
-                {message.content}
-              </p>
+              <Markdown content={message.content} />
             </div>
           ),
         )}
@@ -146,6 +190,16 @@ export function Chat({
         {showRun ? <CoachRun run={run} /> : null}
         <div ref={bottomRef} />
       </div>
+
+      {showScrollBottomBtn ? (
+        <button
+          type="button"
+          onClick={() => scrollToBottom(true)}
+          className="absolute right-7 bottom-20 z-10 flex items-center gap-1.5 rounded-full border border-hairline bg-paper px-3 py-1 font-mono text-xs font-medium text-asphalt shadow-md transition-transform hover:scale-105"
+        >
+          <span>↓ 查看最新回复</span>
+        </button>
+      ) : null}
 
       <div className="border-t border-hairline px-5 py-3.5">
         <div className="flex items-end gap-2">
@@ -159,17 +213,27 @@ export function Chat({
                 submit();
               }
             }}
-            placeholder="给教练发消息…（Enter 发送）"
+            placeholder={busy ? "教练正在生成回复中…" : "给教练发消息…（Enter 发送）"}
             className="max-h-32 min-h-[42px] flex-1 resize-none rounded-lg border border-hairline bg-paper px-3.5 py-2.5 text-sm leading-relaxed outline-none focus:border-asphalt disabled:opacity-60"
           />
-          <button
-            type="button"
-            onClick={submit}
-            disabled={busy || draft.trim() === ""}
-            className="h-[42px] shrink-0 rounded-lg bg-asphalt px-4 text-sm font-medium text-paper transition-colors hover:bg-asphalt/85 disabled:opacity-50"
-          >
-            {busy ? "教练正在回复…" : "发送"}
-          </button>
+          {busy ? (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="h-[42px] shrink-0 rounded-lg border border-track/60 bg-track-wash px-4 text-sm font-medium text-track-deep transition-colors hover:bg-track hover:text-paper"
+            >
+              停止回复
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={submit}
+              disabled={draft.trim() === ""}
+              className="h-[42px] shrink-0 rounded-lg bg-asphalt px-4 text-sm font-medium text-paper transition-colors hover:bg-asphalt/85 disabled:opacity-50"
+            >
+              发送
+            </button>
+          )}
         </div>
       </div>
     </section>

@@ -18,6 +18,7 @@ from app.api.schemas.coaching import (
     AthleteStateResponse,
     PlanSummaryResponse,
     WorkoutFeedbackResponse,
+    WorkoutFeedbackSubmitRequest,
     WorkoutListResponse,
     WorkoutResponse,
 )
@@ -25,14 +26,17 @@ from app.api.schemas.plan_changes import PlannedSessionResponse
 from app.coaching.application.athlete_service import AthleteStateQueryService
 from app.coaching.application.goal_service import GoalQueryService
 from app.coaching.application.plan_service import PlanQueryService
+from app.coaching.application.workout_command_service import WorkoutFeedbackCommandService
 from app.coaching.application.workout_service import WorkoutQueryService
+from app.coaching.ports.workout_mutation_store import WorkoutFeedbackMutation
 from app.common.errors import NotFoundError, RunCoachError
+from app.common.events import EventMetadata
 from app.identity.application.request_context import RequestContext
 
 router = APIRouter()
 
 
-# 从 app.state 取启动时装配好的各查询服务（路由保持无状态）。
+# 从 app.state 取启动时装配好的各服务（路由保持无状态）。
 def _goals(request: Request) -> GoalQueryService:
     return request.app.state.goal_service
 
@@ -47,6 +51,10 @@ def _athlete(request: Request) -> AthleteStateQueryService:
 
 def _workouts(request: Request) -> WorkoutQueryService:
     return request.app.state.workout_service
+
+
+def _workout_feedback_command(request: Request) -> WorkoutFeedbackCommandService:
+    return request.app.state.workout_feedback_command_service
 
 
 @router.get("/api/v1/goals/active", response_model=ActiveGoalResponse)
@@ -175,6 +183,67 @@ async def get_workout_feedback(
         raise to_http_error(exc) from exc
     if feedback is None:
         raise to_http_error(NotFoundError("这次训练还没有主观反馈"))
+    return WorkoutFeedbackResponse(
+        id=feedback.id,
+        user_id=feedback.user_id,
+        workout_id=feedback.workout_id,
+        perceived_exertion=feedback.perceived_exertion,
+        subjective_fatigue=feedback.subjective_fatigue,
+        soreness=feedback.soreness,
+        note=feedback.note,
+        created_at=feedback.created_at,
+    )
+
+
+@router.post(
+    "/api/v1/workouts/{workout_id}/feedback",
+    response_model=WorkoutFeedbackResponse,
+)
+async def submit_workout_feedback(
+    workout_id: UUID,
+    body: WorkoutFeedbackSubmitRequest,
+    request_context: Annotated[RequestContext, Depends(get_request_context)],
+    request: Request,
+) -> WorkoutFeedbackResponse:
+    """提交或更新单次训练的主观反馈（RPE / 疲劳 / 酸痛 / 备注）。"""
+    try:
+        workout = await _workouts(request).get_workout(
+            user_id=request_context.user_id, workout_id=workout_id
+        )
+        if workout is None:
+            raise NotFoundError("训练记录不存在")
+
+        existing = await _workouts(request).get_feedback(
+            user_id=request_context.user_id, workout_id=workout_id
+        )
+        mutation = WorkoutFeedbackMutation(
+            perceived_exertion=body.perceived_exertion,
+            subjective_fatigue=body.subjective_fatigue,
+            soreness=body.soreness,
+            note=body.note,
+        )
+        event_metadata = EventMetadata(
+            correlation_id=request_context.request_id,
+            trace_id=request_context.trace_id,
+        )
+        service = _workout_feedback_command(request)
+        if existing is None:
+            feedback = await service.record(
+                user_id=request_context.user_id,
+                workout_id=workout_id,
+                mutation=mutation,
+                event_metadata=event_metadata,
+            )
+        else:
+            feedback = await service.update(
+                user_id=request_context.user_id,
+                feedback_id=existing.id,
+                mutation=mutation,
+                event_metadata=event_metadata,
+            )
+    except RunCoachError as exc:
+        raise to_http_error(exc) from exc
+
     return WorkoutFeedbackResponse(
         id=feedback.id,
         user_id=feedback.user_id,

@@ -8,7 +8,7 @@
  * 决定的提案卡。采纳后课表换新版本，版本号以盖章动效落下。
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { apiPost } from "@/lib/api";
 import {
@@ -106,6 +106,122 @@ function DayLabel({ cell }: { cell: DayCell }) {
   return <span className="font-mono text-[11px] text-hairline">·</span>;
 }
 
+function SessionDetailModal({
+  cell,
+  pendingChangeReason,
+  onClose,
+}: {
+  cell: DayCell;
+  pendingChangeReason?: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const session = cell.session;
+  if (!session) return null;
+
+  const prescription = session.prescription ?? {};
+  const change = cell.change;
+
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-asphalt/40 p-4 backdrop-blur-xs"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-xl border border-hairline bg-paper p-5 shadow-xl"
+        role="dialog"
+        aria-modal="true"
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <Eyebrow>
+              {cell.weekday} · {formatDayMonth(cell.date)}
+            </Eyebrow>
+            <h3 className="mt-1 text-lg font-semibold tracking-tight text-asphalt">
+              {change ? change.new_title : session.title}
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 font-mono text-sm text-mist hover:bg-fog hover:text-asphalt"
+            aria-label="关闭"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-asphalt px-2 py-0.5 font-mono text-xs font-semibold text-paper">
+              {SESSION_NAME[change ? change.to_type : session.session_type]}
+            </span>
+            <span className="font-mono text-xs text-mist">
+              课型标记: {SESSION_LABEL[change ? change.to_type : session.session_type]}
+            </span>
+          </div>
+
+          <div className="rounded-lg bg-fog p-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-mist">处方详情</p>
+            <div className="mt-2 space-y-1.5 text-sm">
+              <div className="flex justify-between">
+                <span className="text-mist">处方摘要</span>
+                <span className="font-mono font-medium text-asphalt">
+                  {formatPrescription(change ? change.new_prescription : prescription) || "自由安排"}
+                </span>
+              </div>
+              {prescription["notes"] ? (
+                <div className="pt-1 text-xs text-mist">
+                  说明：{String(prescription["notes"])}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {change ? (
+            <div className="rounded-lg border border-track/40 bg-track-wash p-3">
+              <p className="font-mono text-[10px] font-semibold uppercase tracking-wider text-track-deep">
+                教练调整建议
+              </p>
+              <div className="mt-1.5 text-xs text-asphalt">
+                <p className="line-through text-mist">
+                  原安排：{SESSION_NAME[change.from_type]}（{change.old_title}）
+                </p>
+                <p className="mt-0.5 font-medium text-track-deep">
+                  新安排：{SESSION_NAME[change.to_type]}（{change.new_title}）
+                </p>
+              </div>
+              {pendingChangeReason ? (
+                <p className="mt-1.5 text-xs leading-relaxed text-mist">
+                  依据：{pendingChangeReason}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg bg-asphalt px-4 py-2 font-mono text-xs font-medium text-paper transition-colors hover:bg-asphalt/85"
+          >
+            完成
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WeekPlan({
   plan,
   pendingChange,
@@ -118,6 +234,7 @@ export function WeekPlan({
   onRefresh: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [selectedCell, setSelectedCell] = useState<DayCell | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (!plan) {
@@ -168,7 +285,16 @@ export function WeekPlan({
 
       <div className="mt-4 grid grid-cols-7 gap-1">
         {week.map((cell, index) => (
-          <div key={cell.date} className="flex flex-col items-center gap-1.5">
+          <div
+            key={cell.date}
+            onClick={() => cell.session && setSelectedCell(cell)}
+            className={`flex flex-col items-center gap-1.5 rounded-lg py-1 transition-colors ${
+              cell.session
+                ? "cursor-pointer hover:bg-fog"
+                : "opacity-60 cursor-default"
+            }`}
+            title={cell.session ? `点击查看 ${cell.weekday} 课次详情` : "休息日"}
+          >
             <span className="font-mono text-[10px] uppercase tracking-wider text-mist">
               {cell.weekday}
             </span>
@@ -180,6 +306,14 @@ export function WeekPlan({
           </div>
         ))}
       </div>
+
+      {selectedCell ? (
+        <SessionDetailModal
+          cell={selectedCell}
+          pendingChangeReason={pendingDecision?.reason}
+          onClose={() => setSelectedCell(null)}
+        />
+      ) : null}
 
       {isPreparing ? (
         <div className="mt-4 rounded-lg border border-hairline bg-fog p-3.5">
