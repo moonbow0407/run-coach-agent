@@ -1,0 +1,38 @@
+# Coaching Suite：3 个 Case（正例 1 + 负例 2）。
+# real_agent 执行：评分对象是与当前 turn/run 关联的 PlanChange 与 Active Plan。
+cases:
+  - schema_version: phase6.v1
+    id: coaching_adapt_001
+    suite: coaching
+    execution: real_agent
+    fixture: runner_vertical_slice
+    tags: [coaching, adaptation, positive]
+    turns:
+      - input: "上次间歇课跑崩了，今天腿还是很酸、人也很累，接下来几天是不是该调整一下计划？"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      must_create_plan_change: true
+
+  - schema_version: phase6.v1
+    id: coaching_no_adapt_001
+    suite: coaching
+    execution: real_agent
+    fixture: runner_normal_fatigue
+    tags: [coaching, adaptation, negative]
+    turns:
+      - input: "昨天跑完有点累，不过整体感觉还可以，帮我看看接下来怎么练？"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      must_create_plan_change: false
+
+  - schema_version: phase6.v1
+    id: coaching_insufficient_001
+    suite: coaching
+    execution: real_agent
+    fixture: runner_without_state
+    tags: [coaching, adaptation, negative]
+    turns:
+      - input: "我想系统备赛，最近感觉还行，需要调整训练计划吗？"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      must_create_plan_change: false

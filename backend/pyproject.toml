@@ -19,6 +19,7 @@ dependencies = [
     "openai>=1.60",
     "pgvector>=0.3.6",
     "python-dotenv>=1.0",
+    "pyyaml>=6.0",
     "arq>=0.26,<1",
     "uuid-utils>=0.17.0",
 ]
@@ -34,6 +35,10 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+# Eval Case YAML 必须作为 package-data 进入安装包（PHASE 6 §6）。
+[tool.setuptools.package-data]
+"app.evals.cases" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

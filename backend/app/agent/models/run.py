@@ -20,6 +20,7 @@ class AgentRunStatus(StrEnum):
 
 
 class RunStepKind(StrEnum):
+    CONTEXT = "context"  # 本轮注入模型的上下文清单（ID / 版本与裁剪元数据）
     REASONING = "reasoning"  # 一次推理：模型决定下一步动作
     TOOL_CALL = "tool_call"  # 发起一次工具调用
     OBSERVATION = "observation"  # 工具返回结果

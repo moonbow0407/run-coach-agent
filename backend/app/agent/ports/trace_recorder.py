@@ -6,6 +6,7 @@
 from typing import Protocol
 from uuid import UUID
 
+from app.agent.context.bundle import ContextManifest
 from app.agent.models.action import FinalAction, ToolCallAction
 from app.agent.models.observation import Observation
 
@@ -13,6 +14,15 @@ from app.agent.models.observation import Observation
 # Protocol（结构化鸭子类型）：只约束方法签名，实现方无需显式继承本类
 class AgentTraceRecorder(Protocol):
     """执行轨迹记录接口：Runtime 每推进一步就写入一条对应记录。"""
+
+    # 记录本轮注入模型的上下文清单（装配成功后、首次推理前写入）
+    async def record_context(
+        self,
+        *,
+        run_id: UUID,
+        manifest: ContextManifest,
+    ) -> None:
+        ...
 
     # 记录一次推理步：模型给出的 Action 类型（tool_call 或 final）
     async def record_reasoning(

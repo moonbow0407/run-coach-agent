@@ -116,10 +116,45 @@ class EpisodeView:
 
 
 @dataclass(frozen=True)
+class MemoryContextResult:
+    """MemoryContextProvider 的结构化检索结果：视图 + 检索策略元数据。
+
+    policy_version 与 truncation 供 Context Manifest 记录本轮检索口径，
+    不作为业务事实参与 Prompt 渲染。
+    """
+
+    semantic: tuple[MemoryView, ...]  # 入选的语义记忆视图
+    episodic: tuple[EpisodeView, ...]  # 入选的情节记忆视图
+    policy_version: str  # 产生本结果的重排与预算策略版本
+    semantic_truncated: bool  # 语义记忆是否被条数 / 预算截断
+    episodic_truncated: bool  # 情节记忆是否被条数 / 预算截断
+
+
+@dataclass(frozen=True)
+class ContextManifest:
+    """本轮注入模型的上下文清单：只记 ID、版本与裁剪元数据。
+
+    禁止持久化完整 Prompt、对话正文、Memory 内容或隐藏推理。
+    """
+
+    goal_id: UUID | None  # 当前生效目标 ID
+    plan_id: UUID | None  # 当前生效计划 ID
+    plan_version: int | None  # 当前生效计划版本号
+    athlete_state_version: int | None  # 最新跑者状态快照版本号
+    athlete_state_as_of: datetime | None  # 状态快照的证据截止时间
+    semantic_memory_ids: tuple[UUID, ...]  # 本轮注入的语义记忆 ID
+    episodic_memory_ids: tuple[UUID, ...]  # 本轮注入的情节记忆 ID
+    memory_policy_version: str  # 记忆检索策略版本
+    semantic_truncated: bool  # 语义记忆是否被截断
+    episodic_truncated: bool  # 情节记忆是否被截断
+
+
+@dataclass(frozen=True)
 class ContextBundle:
     """发给 Reasoner 的完整上下文合同。
 
-    semantic/episodic memories 由受预算约束的真实检索 Provider 提供。
+    semantic/episodic memories 由受预算约束的真实检索 Provider 提供；
+    检索元数据（policy_version / truncation）供 Context Manifest 使用。
     """
 
     system: str  # 教练 system 指令
@@ -128,6 +163,27 @@ class ContextBundle:
     semantic_memories: list[MemoryView]  # 语义记忆
     episodic_memories: list[EpisodeView]  # 情节记忆
     current_input: str  # 本轮用户输入原文
+    memory_policy_version: str  # 记忆检索策略版本
+    semantic_truncated: bool  # 语义记忆是否被截断
+    episodic_truncated: bool  # 情节记忆是否被截断
+
+    def context_manifest(self) -> ContextManifest:
+        """从装配结果提取上下文清单：只取身份、版本与检索元数据。"""
+        state = self.working_context.latest_athlete_state
+        plan = self.working_context.active_plan
+        goal = self.working_context.goal
+        return ContextManifest(
+            goal_id=goal.id if goal else None,
+            plan_id=plan.id if plan else None,
+            plan_version=plan.version if plan else None,
+            athlete_state_version=state.version if state else None,
+            athlete_state_as_of=state.as_of if state else None,
+            semantic_memory_ids=tuple(item.id for item in self.semantic_memories),
+            episodic_memory_ids=tuple(item.id for item in self.episodic_memories),
+            memory_policy_version=self.memory_policy_version,
+            semantic_truncated=self.semantic_truncated,
+            episodic_truncated=self.episodic_truncated,
+        )
 
 
 @dataclass(frozen=True)

@@ -13,9 +13,8 @@ from uuid import UUID
 
 from app.agent.context.bundle import (
     AthleteStateView,
-    EpisodeView,
     GoalView,
-    MemoryView,
+    MemoryContextResult,
     MessageView,
     PlannedSessionView,
     PlanSummary,
@@ -51,7 +50,7 @@ class ConversationContextProvider(Protocol):
 
 
 class MemoryContextProvider(Protocol):
-    """长期记忆数据源接口：返回（语义记忆, 情节记忆）两组检索结果。"""
+    """长期记忆数据源接口：返回带检索元数据的结构化结果。"""
 
     async def load(
         self,
@@ -59,7 +58,7 @@ class MemoryContextProvider(Protocol):
         user_id: UUID,
         current_input: str,
         as_of: datetime,
-    ) -> tuple[list[MemoryView], list[EpisodeView]]: ...
+    ) -> MemoryContextResult: ...
 
 
 class DomainWorkingContextProvider:
@@ -119,8 +118,8 @@ class NullMemoryContextProvider:
         user_id: UUID,
         current_input: str,
         as_of: datetime,
-    ) -> tuple[list[MemoryView], list[EpisodeView]]:
-        return [], []
+    ) -> MemoryContextResult:
+        return MemoryContextResult((), (), "null", False, False)
 
 
 def _goal_view(goal: TrainingGoal) -> GoalView:

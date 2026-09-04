@@ -33,16 +33,19 @@ class VerticalSliceSeed:
     goal_id: UUID  # 备赛目标 ID
     plan_id: UUID  # 当前 active 计划 ID
     workout_ids: tuple[UUID, ...]  # 四次训练记录 ID（按时间顺序）
+    athlete_state_snapshot_id: UUID  # 跑者状态快照 ID（v1）
 
 
 async def seed_vertical_slice(
     session: AsyncSession,
     *,
     user_id: UUID | None = None,
+    fatigue_level: str = "moderate",
 ) -> VerticalSliceSeed:
     """文档 §47 垂直切片所需的 Goal / Workouts / Plan / AthleteStateSnapshot。
 
     AthleteStateSnapshot 是 fixture，不代表 Phase 1 实现了状态算法。
+    fatigue_level 允许调用方调整快照疲劳等级（如 Eval 高疲劳正例用 high）。
     """
     now = SLICE_NOW
     user_id = user_id or new_id()
@@ -145,14 +148,15 @@ async def seed_vertical_slice(
         )
     )
 
-    # 跑者状态快照（v1）：中等疲劳、恢复一般，用于验证读取路径。
+    # 跑者状态快照（v1）：疲劳等级可参数化，用于验证读取路径。
+    snapshot_id = new_id()
     session.add(
         AthleteStateSnapshotRow(
-            id=new_id(),
+            id=snapshot_id,
             user_id=user_id,
             version=1,
             as_of=datetime(2026, 8, 27, 23, 59, tzinfo=UTC),
-            fatigue_level="moderate",
+            fatigue_level=fatigue_level,
             recovery_level="fair",
             recent_training_load=42.0,
             workout_completion_rate=0.85,
@@ -169,4 +173,5 @@ async def seed_vertical_slice(
         goal_id=goal_id,
         plan_id=plan_id,
         workout_ids=tuple(workout_ids),
+        athlete_state_snapshot_id=snapshot_id,
     )

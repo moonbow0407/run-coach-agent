@@ -35,6 +35,9 @@ def _bundle(recent: list[MessageView] | None = None) -> ContextBundle:
         semantic_memories=[],
         episodic_memories=[],
         current_input="最近训练状态怎么样？",
+        memory_policy_version="test.v1",
+        semantic_truncated=False,
+        episodic_truncated=False,
     )
 
 

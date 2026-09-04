@@ -65,8 +65,8 @@ async def test_runtime_reason_act_observe_final_and_call_id_pairing(
 
     steps = await load_run_steps(sessions, result.run_id)
     kinds = [step.kind for step in steps]
-    # 第二段 reasoning 应看到工具结果，说明循环真的走了两轮推理。
-    assert kinds == ["reasoning", "tool_call", "observation", "reasoning", "final"]
+    # Phase 6 起成功轨迹以 context 开头；第二段 reasoning 应看到工具结果。
+    assert kinds == ["context", "reasoning", "tool_call", "observation", "reasoning", "final"]
     call = next(step for step in steps if step.kind == "tool_call")
     observation = next(step for step in steps if step.kind == "observation")
     assert call.call_id is not None

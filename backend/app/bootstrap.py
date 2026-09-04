@@ -75,7 +75,10 @@ from app.infrastructure.database.repositories.memory_evidence import (
 from app.infrastructure.database.repositories.plan_activation import (
     SqlAlchemyPlanActivationStore,
 )
-from app.infrastructure.database.repositories.trace import SqlAlchemyAgentTraceRecorder
+from app.infrastructure.database.repositories.trace import (
+    SqlAlchemyAgentTraceReader,
+    SqlAlchemyAgentTraceRecorder,
+)
 from app.infrastructure.database.repositories.workout_mutation import (
     SqlAlchemyWorkoutMutationStore,
 )
@@ -122,6 +125,7 @@ class AppContainer:
     conversation_reader: SqlAlchemyConversationReader  # 对话只读查询
     chat_service: ChatService  # 对话编排与事务边界
     reasoner: Reasoner  # 大模型推理器
+    trace_reader: SqlAlchemyAgentTraceReader  # 执行轨迹只读读取（Eval / 审计）
     tool_runtime: ToolRuntime  # Tool 治理入口（搜索/解析/执行）
     tool_registry: ToolRegistry  # 工具注册表
     goal_service: GoalQueryService  # 目标查询
@@ -191,6 +195,7 @@ def build_container(
         plan_adaptation=plan_adaptation_service,
     )
     trace_recorder = SqlAlchemyAgentTraceRecorder(sessions, clock)
+    trace_reader = SqlAlchemyAgentTraceReader(sessions)
 
     if settings.memory_embedding_dimensions != 1536:
         # 维度是 Phase 4 持久化合同：pgvector 列按 1536 建，不允许随意改
@@ -313,6 +318,7 @@ def build_container(
         conversation_reader=conversation_reader,
         chat_service=chat_service,
         reasoner=reasoner,
+        trace_reader=trace_reader,
         tool_runtime=tool_runtime,
         tool_registry=registry,
         goal_service=goal_service,
@@ -378,6 +384,7 @@ def create_app(
     app.state.conversation_store = container.conversation_store
     app.state.conversation_reader = container.conversation_reader
     app.state.chat_service = container.chat_service
+    app.state.trace_reader = container.trace_reader
     app.state.tool_runtime = container.tool_runtime
     app.state.tool_registry = container.tool_registry
     app.state.goal_service = container.goal_service

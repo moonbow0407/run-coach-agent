@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from app.agent.context.bundle import EpisodeView, MemoryView
+from app.agent.context.bundle import EpisodeView, MemoryContextResult, MemoryView
 from app.memory.application.retrieval_service import MemoryRetrievalService
 
 
@@ -19,7 +19,7 @@ class RetrievedMemoryContextProvider:
         user_id: UUID,
         current_input: str,
         as_of: datetime,
-    ) -> tuple[list[MemoryView], list[EpisodeView]]:
+    ) -> MemoryContextResult:
         """以当前输入为查询检索长期记忆，并裁剪为上下文视图字段。"""
         result = await self._retrieval.retrieve(
             user_id=user_id,
@@ -27,7 +27,7 @@ class RetrievedMemoryContextProvider:
             as_of=as_of,
         )
         # 领域对象 → 展示视图：只挑 Context 需要的字段，不透传内部结构。
-        semantic = [
+        semantic = tuple(
             MemoryView(
                 id=item.id,
                 type=item.type.value,
@@ -38,8 +38,8 @@ class RetrievedMemoryContextProvider:
                 valid_until=item.valid_until,
             )
             for item in result.semantic
-        ]
-        episodic = [
+        )
+        episodic = tuple(
             EpisodeView(
                 id=item.id,
                 type=item.type.value,
@@ -49,5 +49,11 @@ class RetrievedMemoryContextProvider:
                 importance=item.importance,
             )
             for item in result.episodic
-        ]
-        return semantic, episodic
+        )
+        return MemoryContextResult(
+            semantic=semantic,
+            episodic=episodic,
+            policy_version=result.policy_version,
+            semantic_truncated=result.semantic_truncated,
+            episodic_truncated=result.episodic_truncated,
+        )

@@ -30,3 +30,6 @@ Thumbs.db
 *~
 .zcode/
 .workbuddy/
+
+# Eval 运行产物（JSON artifact 与 baseline）
+.eval-results/

@@ -18,7 +18,10 @@ from app.agent.context.providers import (
     WorkingContextProvider,
 )
 
-# 教练角色的 system 指令：每轮装配时原样注入 system 消息
+# 教练角色的 system 指令：每轮装配时原样注入 system 消息。
+# PROMPT_VERSION 是显式版本常量：指令语义变化时必须同步提升，供 Eval 溯源。
+PROMPT_VERSION = "phase6.v1"
+
 SYSTEM_PROMPT = """你是长期跑步训练教练 Agent。
 
 需要根据已提供的跑者状态和当前可见的工具完成当前任务。
@@ -57,8 +60,8 @@ class ContextAssembler:
             exclude_turn_id=request.turn_id,
             limit=self._history_limit,
         )
-        # 语义记忆 + 情节记忆，均由 Provider 按预算检索
-        semantic, episodic = await self._memory.load(
+        # 语义记忆 + 情节记忆，均由 Provider 按预算检索（含策略元数据）
+        memory = await self._memory.load(
             user_id=request.user_id,
             current_input=request.current_input,
             as_of=request.timestamp,
@@ -67,7 +70,10 @@ class ContextAssembler:
             system=SYSTEM_PROMPT.strip(),
             working_context=working,
             recent_messages=recent,
-            semantic_memories=semantic,
-            episodic_memories=episodic,
+            semantic_memories=list(memory.semantic),
+            episodic_memories=list(memory.episodic),
             current_input=request.current_input,
+            memory_policy_version=memory.policy_version,
+            semantic_truncated=memory.semantic_truncated,
+            episodic_truncated=memory.episodic_truncated,
         )

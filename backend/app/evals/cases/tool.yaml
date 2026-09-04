@@ -1,0 +1,94 @@
+# Tool Suite：7 个 Case（Selection / Discovery / Governance）。
+# 全部为 real_agent 执行：真实 ChatService + AgentRuntime + LLM。
+cases:
+  - schema_version: phase6.v1
+    id: tool_recent_001
+    suite: tool
+    execution: real_agent
+    fixture: runner_vertical_slice
+    tags: [tool, selection]
+    turns:
+      - input: "帮我看看最近 7 天的训练记录。"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      required_successful_tools:
+        - get_recent_workouts
+
+  - schema_version: phase6.v1
+    id: tool_feedback_001
+    suite: tool
+    execution: real_agent
+    fixture: runner_vertical_slice
+    tags: [tool, selection]
+    turns:
+      - input: "我只想知道上次那节间歇课的主观反馈，先不要给我做客观分析。"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      required_successful_tools:
+        - get_workout_feedback
+      forbidden_tool_attempts:
+        - analyze_workout
+
+  - schema_version: phase6.v1
+    id: tool_workout_analysis_001
+    suite: tool
+    execution: real_agent
+    fixture: runner_vertical_slice
+    tags: [tool, selection]
+    turns:
+      - input: "帮我分析一下上次那节间歇课的数据，评估一下这堂课的质量。"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      required_successful_tools:
+        - analyze_workout
+
+  - schema_version: phase6.v1
+    id: tool_discovery_detail_001
+    suite: tool
+    execution: real_agent
+    fixture: runner_vertical_slice
+    tags: [tool, discovery]
+    turns:
+      - input: "我想看上次那节间歇课的完整客观数据，特别是心率细节。"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      required_discoveries:
+        - get_workout_detail
+
+  - schema_version: phase6.v1
+    id: tool_discovery_load_001
+    suite: tool
+    execution: real_agent
+    fixture: runner_vertical_slice
+    tags: [tool, discovery]
+    turns:
+      - input: "帮我对比一下最近 7 天和再之前 7 天的训练负荷与 sRPE 覆盖情况。"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      required_discoveries:
+        - analyze_training_load
+
+  - schema_version: phase6.v1
+    id: tool_governance_fatigue_001
+    suite: tool
+    execution: real_agent
+    fixture: runner_normal_fatigue
+    tags: [tool, governance]
+    turns:
+      - input: "昨天练完有点累，不过感觉还好，休息一晚就缓过来了。"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      forbidden_tool_attempts:
+        - propose_plan_adaptation
+
+  - schema_version: phase6.v1
+    id: tool_governance_context_001
+    suite: tool
+    execution: real_agent
+    fixture: runner_vertical_slice
+    tags: [tool, governance]
+    turns:
+      - input: "我的比赛目标是什么来着？"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      max_tool_attempts: 0

@@ -84,10 +84,11 @@ async def test_dynamic_tool_discovery_vertical_slice(
     hit_names = {hit["name"] for hit in search_observation.data["hits"]}
     assert hit_names == {"get_workout_detail", "get_workout_feedback"}
 
-    # RunStep 轨迹可重建：tool_call 与 observation 各 4 条，成对共享 call_id。
+    # RunStep 轨迹可重建：Phase 6 起以 context 开头；tool_call 与 observation 各 4 条，成对共享 call_id。
     steps = await load_run_steps(sessions, result.run_id)
     kinds = [step.kind for step in steps]
     assert kinds == [
+        "context",
         "reasoning",
         "tool_call",
         "observation",

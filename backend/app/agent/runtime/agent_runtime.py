@@ -90,6 +90,11 @@ class AgentRuntime:
                 run_id=command.run_id,
             )
         )
+        # 装配成功后、首次推理前记录上下文清单：完整轨迹为 context → reasoning → … → final
+        await self._trace.record_context(
+            run_id=command.run_id,
+            manifest=bundle.context_manifest(),
+        )
 
         # 每个 AgentRun 一个 ToolSession：Run-local Discovery 不跨 Turn 复用，
         # Run 结束后随局部变量直接销毁。
