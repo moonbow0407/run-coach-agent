@@ -59,9 +59,7 @@ async def test_runtime_reason_act_observe_final_and_call_id_pairing(
     # 流式正文增量：只有最终回答那一步推文本（step_index 与循环下标一致），
     # 工具调用步不产生任何 delta，避免附带文本混入用户可见内容。
     deltas = [event for event in events if isinstance(event, ResponseDelta)]
-    assert [(d.step_index, d.delta) for d in deltas] == [
-        (1, "最近四次训练都完成了。")
-    ]
+    assert [(d.step_index, d.delta) for d in deltas] == [(1, "最近四次训练都完成了。")]
 
     steps = await load_run_steps(sessions, result.run_id)
     kinds = [step.kind for step in steps]
@@ -90,6 +88,14 @@ async def test_runtime_reason_act_observe_final_and_call_id_pairing(
     assert isinstance(second_state.interactions[1].data, dict)
     assert len(second_state.interactions[1].data["workouts"]) == 4
 
-    # 初始可见 Tool 恰为 always-on 两个：search_tools + get_recent_workouts。
+    # 初始可见 Tool 为 always-on 集合（含核心 coaching 查询）。
     visible_names = {tool.name for tool in reasoner.seen_contexts[0].visible_tools}
-    assert visible_names == {"search_tools", "get_recent_workouts"}
+    assert visible_names == {
+        "search_tools",
+        "get_recent_workouts",
+        "get_active_goal",
+        "get_active_plan",
+        "get_latest_athlete_state",
+        "get_unresolved_plan_change",
+        "get_safety_status",
+    }

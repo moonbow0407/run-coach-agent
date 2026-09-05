@@ -62,9 +62,7 @@ async def test_native_tool_calling_contract_end_to_end(
     provider = FakeNativeProvider(
         [
             _tool_call_response("native-1", "get_recent_workouts", {"days": 7}),
-            _tool_call_response(
-                "native-2", "search_tools", {"query": "主观反馈", "limit": 3}
-            ),
+            _tool_call_response("native-2", "search_tools", {"query": "主观反馈", "limit": 3}),
             _tool_call_response(
                 "native-3", "get_workout_feedback", {"workout_id": str(workout_id)}
             ),
@@ -84,7 +82,15 @@ async def test_native_tool_calling_contract_end_to_end(
 
     # 1) 动态可见 Tool Schema 逐轮传给 Provider（native tools 参数）。
     first_tools = {tool.name for tool in provider.requests[0].tools}
-    assert first_tools == {"search_tools", "get_recent_workouts"}
+    assert first_tools == {
+        "search_tools",
+        "get_recent_workouts",
+        "get_active_goal",
+        "get_active_plan",
+        "get_latest_athlete_state",
+        "get_unresolved_plan_change",
+        "get_safety_status",
+    }
     third_tools = {tool.name for tool in provider.requests[2].tools}
     assert "get_workout_feedback" in third_tools
 

@@ -16,6 +16,7 @@ AgentRuntime 只负责推理循环，二者职责严格分离。
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import date
 from uuid import UUID
 
 from app.agent.lifecycle.dispatcher import LifecycleDispatcher
@@ -27,15 +28,41 @@ from app.agent.lifecycle.events import (
     TurnStarted,
 )
 from app.agent.models.action import FinalAction
+from app.agent.ports.checkpoint_store import AgentCheckpointStore
 from app.agent.ports.conversation_store import CommittedTurn, ConversationStore, StartedTurn
 from app.agent.runtime.agent_runtime import AgentRuntime
 from app.agent.runtime.run_context import AgentTurnCommand
-from app.common.errors import RunCoachError
+from app.coaching.application.plan_adaptation_service import PlanAdaptationService
+from app.coaching.domain.plan.models import PlanChange, PlanChangeStatus
+from app.common.errors import NotFoundError, RunCoachError
 from app.common.errors import TurnCancelled as TurnCancelledError
 from app.common.events import EventMetadata
 from app.identity.application.request_context import RequestContext
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SessionDiffSummaryData:
+    """课次变更摘要（应用层，与 API DTO 字段对齐）。"""
+
+    scheduled_date: date  # 课次日期
+    from_type: str
+    to_type: str
+    old_title: str
+    new_title: str
+
+
+@dataclass(frozen=True)
+class PendingPlanChangeData:
+    """未解决计划调整摘要：供 ChatResponse / SSE 终态挂载 CTA。"""
+
+    id: UUID
+    change_type: str
+    reason: str
+    status: str
+    from_plan_version: int
+    session_diffs: tuple[SessionDiffSummaryData, ...]
 
 
 @dataclass(frozen=True)
@@ -47,6 +74,8 @@ class ChatResult:
     message_id: UUID  # 本轮助手消息 ID
     content: str  # 助手最终回答文本
     run_id: UUID
+    pending_plan_change: PendingPlanChangeData | None = None  # 未解决提案
+    actions: tuple[str, ...] = ()  # 如 confirm_plan_change / reject_plan_change
 
 
 class ChatService:
@@ -61,10 +90,14 @@ class ChatService:
         conversation_store: ConversationStore,
         runtime: AgentRuntime,
         lifecycle: LifecycleDispatcher,
+        checkpoint_store: AgentCheckpointStore | None = None,
+        plan_adaptation_service: PlanAdaptationService | None = None,
     ) -> None:
         self._store = conversation_store  # 会话存储端口：Thread/Turn 消息的事务边界
         self._runtime = runtime  # Agent 推理循环，只负责 reasoning
         self._lifecycle = lifecycle  # 生命周期事件分发
+        self._checkpoints = checkpoint_store  # 可选：失败后续跑用的检查点存储
+        self._adaptation = plan_adaptation_service  # 可选：对话结束挂载未解决提案 CTA
 
     async def send_message(
         self,
@@ -186,7 +219,132 @@ class ChatService:
                 committed_at=committed.turn.committed_at or request_context.timestamp,
             )
         )
-        return ChatResult(
+        return await self._with_pending_cta(
+            user_id=request_context.user_id,
+            thread_id=committed.thread.id,
+            turn_id=committed.turn.id,
+            message_id=committed.assistant_message.id,
+            content=committed.assistant_message.content,
+            run_id=committed.run.id,
+        )
+
+    async def resume_run(
+        self,
+        *,
+        request_context: RequestContext,
+        run_id: UUID,
+    ) -> ChatResult:
+        """从失败 Run 的最新检查点继续 Reason–Act，成功后提交对话。"""
+        if self._checkpoints is None:
+            raise RunCoachError("未配置检查点存储，无法续跑")
+        checkpoint = await self._checkpoints.get_latest(
+            user_id=request_context.user_id, run_id=run_id
+        )
+        if checkpoint is None:
+            raise NotFoundError("没有可恢复的检查点")
+        started = await self._store.reopen_failed_turn(
+            user_id=request_context.user_id,
+            turn_id=checkpoint.turn_id,
+        )
+        if started.run.id != run_id:
+            raise NotFoundError("AgentRun 与检查点不一致")
+
+        try:
+            await self._lifecycle.publish(
+                TurnStarted(
+                    request_id=request_context.request_id,
+                    trace_id=request_context.trace_id,
+                    turn_id=started.turn.id,
+                    thread_id=started.thread.id,
+                    user_id=request_context.user_id,
+                    run_id=started.run.id,
+                    started_at=started.turn.started_at,
+                )
+            )
+            final = await self._runtime.run(
+                AgentTurnCommand(
+                    user_id=request_context.user_id,
+                    thread_id=started.thread.id,
+                    turn_id=started.turn.id,
+                    run_id=started.run.id,
+                    request_id=request_context.request_id,
+                    trace_id=request_context.trace_id,
+                    timestamp=request_context.timestamp,
+                    current_input=checkpoint.current_input,
+                    resume=True,
+                )
+            )
+            committed = await self._commit(
+                request_context=request_context,
+                started=started,
+                final=final,
+            )
+        except (asyncio.CancelledError, TurnCancelledError):
+            await self._store.cancel_turn(
+                user_id=request_context.user_id,
+                turn_id=started.turn.id,
+                event_metadata=_event_metadata(request_context),
+            )
+            await self._lifecycle.publish_after_commit(
+                TurnCancelled(
+                    request_id=request_context.request_id,
+                    trace_id=request_context.trace_id,
+                    turn_id=started.turn.id,
+                    thread_id=started.thread.id,
+                    user_id=request_context.user_id,
+                    run_id=started.run.id,
+                )
+            )
+            raise
+        except Exception as exc:
+            await self._store.fail_turn(
+                user_id=request_context.user_id,
+                turn_id=started.turn.id,
+                event_metadata=_event_metadata(request_context),
+            )
+            client_error = str(exc) if isinstance(exc, RunCoachError) else "Agent 执行失败"
+            if not isinstance(exc, RunCoachError):
+                logger.error(
+                    "chat.resume_failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                    extra={
+                        "request_id": str(request_context.request_id),
+                        "trace_id": str(request_context.trace_id),
+                        "user_id": str(request_context.user_id),
+                        "turn_id": str(started.turn.id),
+                        "run_id": str(started.run.id),
+                    },
+                )
+            await self._lifecycle.publish_after_commit(
+                TurnFailed(
+                    request_id=request_context.request_id,
+                    trace_id=request_context.trace_id,
+                    turn_id=started.turn.id,
+                    thread_id=started.thread.id,
+                    user_id=request_context.user_id,
+                    run_id=started.run.id,
+                    error=client_error,
+                )
+            )
+            if isinstance(exc, RunCoachError):
+                raise
+            raise RunCoachError("Agent 执行失败") from exc
+
+        await self._lifecycle.publish_after_commit(
+            TurnCommitted(
+                request_id=request_context.request_id,
+                trace_id=request_context.trace_id,
+                turn_id=committed.turn.id,
+                thread_id=committed.thread.id,
+                user_id=request_context.user_id,
+                user_message_id=committed.turn.user_message_id,
+                assistant_message_id=committed.assistant_message.id,
+                run_id=committed.run.id,
+                committed_at=committed.turn.committed_at or request_context.timestamp,
+            )
+        )
+        return await self._with_pending_cta(
+            user_id=request_context.user_id,
             thread_id=committed.thread.id,
             turn_id=committed.turn.id,
             message_id=committed.assistant_message.id,
@@ -218,6 +376,68 @@ class ChatService:
             event_metadata=_event_metadata(request_context),
         )
         return committed
+
+    async def _with_pending_cta(
+        self,
+        *,
+        user_id: UUID,
+        thread_id: UUID,
+        turn_id: UUID,
+        message_id: UUID,
+        content: str,
+        run_id: UUID,
+    ) -> ChatResult:
+        """组装 ChatResult，并在有未解决提案时附带 CTA 字段。"""
+        pending, actions = await self._load_pending_cta(user_id=user_id)
+        return ChatResult(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            message_id=message_id,
+            content=content,
+            run_id=run_id,
+            pending_plan_change=pending,
+            actions=actions,
+        )
+
+    async def _load_pending_cta(
+        self, *, user_id: UUID
+    ) -> tuple[PendingPlanChangeData | None, tuple[str, ...]]:
+        """读取未解决提案；确认/拒绝动作仅在 pending_confirmation 时开放。"""
+        if self._adaptation is None:
+            return None, ()
+        try:
+            change = await self._adaptation.get_unresolved(user_id=user_id)
+        except NotFoundError:
+            return None, ()
+        return _pending_from_change(change), _actions_for(change)
+
+
+def _pending_from_change(change: PlanChange) -> PendingPlanChangeData:
+    """领域 PlanChange → 对话 CTA 摘要。"""
+    return PendingPlanChangeData(
+        id=change.id,
+        change_type=change.change_type.value,
+        reason=change.reason,
+        status=change.status.value,
+        from_plan_version=change.from_plan_version,
+        session_diffs=tuple(
+            SessionDiffSummaryData(
+                scheduled_date=item.scheduled_date,
+                from_type=item.from_type.value,
+                to_type=item.to_type.value,
+                old_title=item.old_title,
+                new_title=item.new_title,
+            )
+            for item in change.payload.changes
+        ),
+    )
+
+
+def _actions_for(change: PlanChange) -> tuple[str, ...]:
+    """仅待确认状态提供确认/拒绝动作；草案仍在异步收尾中。"""
+    if change.status is PlanChangeStatus.PENDING_CONFIRMATION:
+        return ("confirm_plan_change", "reject_plan_change")
+    return ()
 
 
 def _event_metadata(context: RequestContext) -> EventMetadata:

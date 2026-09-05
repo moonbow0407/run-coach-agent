@@ -10,7 +10,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { LiveRun } from "@/hooks/useChat";
-import type { ThreadMessage } from "@/lib/types";
+import { apiPost } from "@/lib/api";
+import { CHANGE_TYPE_LABEL } from "@/lib/format";
+import type { PendingPlanChangeSummary, ThreadMessage } from "@/lib/types";
 import { Eyebrow } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 
@@ -25,6 +27,8 @@ const TOOL_LABELS: Record<string, string> = {
   analyze_training_load: "分析训练负荷",
   analyze_workout: "分析训练详情",
   propose_plan_adaptation: "起草课表调整",
+  get_safety_status: "查看安全约束",
+  get_unresolved_plan_change: "查看待确认调整",
 };
 
 function toolLabel(tool: string): string {
@@ -68,20 +72,102 @@ function CoachRun({ run }: { run: LiveRun }) {
   );
 }
 
+function PlanChangeBanner({
+  pending,
+  actions,
+  onDecided,
+}: {
+  pending: PendingPlanChangeSummary;
+  actions: string[];
+  onDecided: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canDecide =
+    pending.status === "pending_confirmation" &&
+    actions.includes("confirm_plan_change") &&
+    actions.includes("reject_plan_change");
+
+  const decide = async (action: "confirm" | "reject") => {
+    if (!canDecide || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiPost(`/api/v1/plan-changes/${pending.id}/${action}`);
+      onDecided();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-track/50 bg-track-wash px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-track">
+          {canDecide ? "等你确认课表调整" : "课表调整准备中"}
+        </p>
+        <span className="rounded border border-track/60 bg-paper px-1.5 py-0.5 font-mono text-[10px] font-semibold text-track-deep">
+          {CHANGE_TYPE_LABEL[pending.change_type] ?? pending.change_type}
+        </span>
+        <span className="font-mono text-[10px] text-mist">v{pending.from_plan_version}</span>
+      </div>
+      <p className="mt-1.5 text-sm leading-relaxed text-asphalt">{pending.reason}</p>
+      {pending.session_diffs.length > 0 ? (
+        <p className="mt-1 font-mono text-[11px] text-mist">
+          影响 {pending.session_diffs.length} 节课
+          {pending.session_diffs.slice(0, 3).map((d) => ` · ${d.scheduled_date.slice(5)} ${d.from_type}→${d.to_type}`).join("")}
+          {pending.session_diffs.length > 3 ? " …" : ""}
+        </p>
+      ) : null}
+      {error ? <p className="mt-2 text-sm text-track-deep">{error}</p> : null}
+      {canDecide ? (
+        <div className="mt-2.5 flex gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void decide("confirm")}
+            className="rounded-lg bg-track px-3 py-1.5 text-sm font-medium text-paper transition-colors hover:bg-track-deep disabled:opacity-50"
+          >
+            采纳调整
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void decide("reject")}
+            className="rounded-lg border border-asphalt/30 px-3 py-1.5 text-sm font-medium text-asphalt transition-colors hover:bg-fog disabled:opacity-50"
+          >
+            保持原计划
+          </button>
+        </div>
+      ) : (
+        <p className="mt-1.5 text-xs text-mist">后台定稿完成后会出现确认按钮。</p>
+      )}
+    </div>
+  );
+}
+
 export function Chat({
   messages,
   run,
   historyError,
+  pendingPlanChange,
+  planChangeActions,
   onSend,
   onCancel,
   onNewThread,
+  onPlanChangeDecided,
 }: {
   messages: ThreadMessage[];
   run: LiveRun;
   historyError: string | null;
+  pendingPlanChange: PendingPlanChangeSummary | null;
+  planChangeActions: string[];
   onSend: (text: string) => Promise<void>;
   onCancel: () => void;
   onNewThread: () => void;
+  onPlanChangeDecided: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -186,6 +272,14 @@ export function Chat({
             </div>
           ),
         )}
+
+        {pendingPlanChange ? (
+          <PlanChangeBanner
+            pending={pendingPlanChange}
+            actions={planChangeActions}
+            onDecided={onPlanChangeDecided}
+          />
+        ) : null}
 
         {showRun ? <CoachRun run={run} /> : null}
         <div ref={bottomRef} />

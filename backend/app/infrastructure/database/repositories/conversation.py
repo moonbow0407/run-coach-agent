@@ -212,6 +212,41 @@ class SqlAlchemyConversationStore:
             event_metadata=event_metadata,
         )
 
+    async def reopen_failed_turn(self, *, user_id: UUID, turn_id: UUID) -> StartedTurn:
+        """把 FAILED 的 Turn / AgentRun 重新打开为 running，供检查点续跑。"""
+        async with short_session(self._sessions, commit=True) as session:
+            turn_row = await session.get(TurnRow, turn_id)
+            if turn_row is None:
+                raise NotFoundError("Turn 不存在")
+            if turn_row.user_id != user_id:
+                raise ForbiddenError("无权访问该 Turn")
+            if turn_row.status != TurnStatus.FAILED.value:
+                raise ForbiddenError(f"Turn 当前状态不可续跑: {turn_row.status}")
+            run_row = await session.scalar(
+                select(AgentRunRow).where(AgentRunRow.turn_id == turn_id)
+            )
+            if run_row is None:
+                raise NotFoundError("AgentRun 不存在")
+            if run_row.status != AgentRunStatus.FAILED.value:
+                raise ForbiddenError(f"AgentRun 当前状态不可续跑: {run_row.status}")
+            thread_row = await self._require_thread(
+                session, user_id=user_id, thread_id=turn_row.thread_id
+            )
+            user_message = await session.get(MessageRow, turn_row.user_message_id)
+            if user_message is None:
+                raise NotFoundError("用户消息不存在")
+            turn_row.status = TurnStatus.RUNNING.value
+            run_row.status = AgentRunStatus.RUNNING.value
+            run_row.completed_at = None
+            thread_row.updated_at = self._clock.now()
+            await session.flush()
+            return StartedTurn(
+                thread=thread_from_row(thread_row),
+                turn=turn_from_row(turn_row),
+                user_message=message_from_row(user_message),
+                run=run_from_row(run_row),
+            )
+
     async def _finish_unsuccessfully(
         self,
         *,

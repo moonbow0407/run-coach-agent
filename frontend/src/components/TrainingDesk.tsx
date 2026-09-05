@@ -80,7 +80,7 @@ export function TrainingDesk({
         latestWorkoutId={data.workouts?.workouts?.[0]?.id ?? null}
       />
 
-      <DashboardHeader goal={data.goal} state={data.state} today={today} />
+      <DashboardHeader goal={data.goal} state={data.state} today={today} safety={data.safety} />
 
       {data.error ? (
         <div className="mx-auto mt-4 w-full max-w-6xl px-5">
@@ -112,9 +112,15 @@ export function TrainingDesk({
             messages={chat.messages}
             run={chat.run}
             historyError={chat.historyError}
+            pendingPlanChange={chat.pendingPlanChange}
+            planChangeActions={chat.planChangeActions}
             onSend={chat.send}
             onCancel={chat.cancel}
             onNewThread={chat.startNewThread}
+            onPlanChangeDecided={() => {
+              chat.clearPendingPlanChange();
+              void data.reloadAfterDecision();
+            }}
           />
         </div>
         <aside className={`${view === "desk" ? "" : "hidden"} md:block`}>{desk}</aside>

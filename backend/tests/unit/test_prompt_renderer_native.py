@@ -29,6 +29,7 @@ def _bundle(recent: list[MessageView] | None = None) -> ContextBundle:
             goal=None,
             active_plan=None,
             latest_athlete_state=None,
+            recent_feedback=(),
             critical_constraints=(),
         ),
         recent_messages=recent or [],
@@ -110,6 +111,5 @@ def test_interactions_become_native_tool_call_and_result() -> None:
     assert '"status": "success"' in messages[3].content
     # 交互不再以 user 消息表达。
     assert not any(
-        isinstance(message, UserMessage) and "已经发生" in message.content
-        for message in messages
+        isinstance(message, UserMessage) and "已经发生" in message.content for message in messages
     )

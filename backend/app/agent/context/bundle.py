@@ -72,12 +72,24 @@ class AthleteStateView:
 
 
 @dataclass(frozen=True)
+class FeedbackSummaryView:
+    """近期训练主观反馈摘要：注入热上下文，减少模型为读反馈再搜工具。"""
+
+    workout_id: UUID
+    started_on: date  # 训练日期（本地日历日）
+    perceived_exertion: int | None  # RPE / 用力程度（1–10）
+    subjective_fatigue: int | None  # 主观疲劳（1–10）
+    note_snippet: str | None  # 备注截断片段
+
+
+@dataclass(frozen=True)
 class WorkingContext:
     """热上下文：跑者现在怎么样的当前结论。"""
 
     goal: GoalView | None  # 当前生效目标（新用户可能没有）
     active_plan: PlanSummary | None  # 当前生效计划摘要
     latest_athlete_state: AthleteStateView | None  # 最新跑者状态快照
+    recent_feedback: tuple[FeedbackSummaryView, ...]  # 最近若干条反馈摘要
     critical_constraints: tuple[str, ...]  # 必须遵守的硬性约束
 
 

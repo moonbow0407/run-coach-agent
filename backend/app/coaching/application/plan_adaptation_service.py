@@ -4,7 +4,10 @@ from datetime import datetime
 from uuid import UUID
 
 from app.coaching.application.errors import StalePlanChangeError
-from app.coaching.domain.plan.adaptation import generate_reduce_upcoming_load
+from app.coaching.domain.plan.adaptation import (
+    generate_convert_hard_sessions_to_easy,
+    generate_reduce_upcoming_load,
+)
 from app.coaching.domain.plan.models import (
     PlanChange,
     PlanChangeStatus,
@@ -90,6 +93,63 @@ class PlanAdaptationService:
             source_run_id=run_id,
             as_of=as_of,
             change_type=PlanChangeType.REDUCE_UPCOMING_LOAD,
+            payload=generated.payload,
+            reason=reason,
+            status=PlanChangeStatus.DRAFT,
+            created_at=self._clock.now(),
+            resolved_at=None,
+            resulting_plan_id=None,
+        )
+        stored = await self._changes.add(change)
+        return stored, generated.race_session_not_modified
+
+    async def propose_convert_hard_sessions_to_easy(
+        self,
+        *,
+        user_id: UUID,
+        turn_id: UUID,
+        run_id: UUID,
+        as_of: datetime,
+        based_on_plan_version: int,
+        based_on_state_version: int,
+        horizon_days: int,
+        reason: str,
+    ) -> tuple[PlanChange, bool]:
+        """创建「高强度→轻松跑」DRAFT。返回 (提案, 窗口内是否有未改动的 Race)。"""
+        if not reason.strip():
+            raise DomainError("reason_required")
+        unresolved = await self._changes.get_unresolved(user_id=user_id)
+        if unresolved is not None:
+            raise ConflictError("unresolved_plan_change_exists")
+        plan = await self._plans.get_active(user_id=user_id)
+        if plan is None:
+            raise DomainError("no_active_plan")
+        if plan.version != based_on_plan_version:
+            raise DomainError("based_on_plan_version_mismatch")
+        state = await self._snapshots.get_latest(user_id=user_id)
+        if state is None:
+            raise DomainError("no_athlete_state")
+        if state.version != based_on_state_version:
+            raise DomainError("based_on_state_version_mismatch")
+        sessions = await self._plans.list_sessions(user_id=user_id, plan_id=plan.id)
+        generated = generate_convert_hard_sessions_to_easy(
+            as_of=as_of,
+            horizon_days=horizon_days,
+            sessions=sessions,
+            fatigue_level=state.fatigue_level,
+            recovery_level=state.recovery_level,
+        )
+        change = PlanChange(
+            id=new_id(),
+            user_id=user_id,
+            from_plan_id=plan.id,
+            from_plan_version=plan.version,
+            based_on_state_id=state.id,
+            based_on_state_version=state.version,
+            source_turn_id=turn_id,
+            source_run_id=run_id,
+            as_of=as_of,
+            change_type=PlanChangeType.CONVERT_HARD_SESSIONS_TO_EASY,
             payload=generated.payload,
             reason=reason,
             status=PlanChangeStatus.DRAFT,

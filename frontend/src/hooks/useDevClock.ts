@@ -95,12 +95,11 @@ export function useDevClock(onChanged?: () => void): DevClockController {
     [run],
   );
 
-  // 记课后立刻同步重算快照：UI 即时反映新负荷，不必等 Worker 的 5s cron。
+  // 记课（含可选内联反馈）由后端同步重算，前端无需再单独触发。
   const recordWorkout = useCallback(
     (input: DevWorkoutInput) =>
       run(async () => {
         await recordDevWorkout(input);
-        await recomputeDevState();
       }),
     [run],
   );

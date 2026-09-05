@@ -12,6 +12,7 @@ import { memo, useEffect, useState } from "react";
 
 import { apiPost } from "@/lib/api";
 import {
+  CHANGE_TYPE_LABEL,
   SESSION_LABEL,
   SESSION_LOAD,
   SESSION_NAME,
@@ -346,34 +347,65 @@ export const WeekPlan = memo(function WeekPlan({
         </div>
       ) : pendingDecision ? (
         <div className="mt-4 rounded-lg border border-track/50 bg-track-wash p-3.5">
-          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-track">
-            等你的决定 · 红铅笔批注
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-track">
+              等你的决定 · 红铅笔批注
+            </p>
+            <span className="rounded border border-track/60 bg-paper px-1.5 py-0.5 font-mono text-[10px] font-semibold text-track-deep">
+              {CHANGE_TYPE_LABEL[pendingDecision.change_type] ?? pendingDecision.change_type}
+            </span>
+          </div>
           <p className="mt-1.5 text-sm font-medium text-asphalt">
-            教练建议下调未来 {pendingDecision.payload.horizon_days} 天的负荷
+            教练建议调整未来 {pendingDecision.payload.horizon_days} 天课表
+            （共 {decisions.length} 节）
           </p>
-          <p className="mt-1 text-sm leading-relaxed text-mist">{pendingDecision.reason}</p>
+          <p className="mt-1 text-sm leading-relaxed text-mist">
+            <span className="font-medium text-asphalt/80">理由：</span>
+            {pendingDecision.reason}
+          </p>
 
-          <ul className="mt-3 space-y-1.5">
-            {decisions.map((change) => (
-              <li key={change.source_session_id} className="text-sm leading-snug">
-                <span className="font-mono text-xs text-mist">
-                  {formatDayMonth(change.scheduled_date)}
-                </span>
-                <span className="mx-1.5 text-mist line-through">
-                  {SESSION_NAME[change.from_type]}
-                </span>
-                <span className="text-mist">→</span>
-                <span className="mx-1.5 font-medium text-track-deep">
-                  {SESSION_NAME[change.to_type]}
-                </span>
-                {formatPrescription(change.new_prescription) ? (
-                  <span className="ml-1 font-mono text-xs text-mist">
-                    {formatPrescription(change.new_prescription)}
-                  </span>
-                ) : null}
-              </li>
-            ))}
+          <ul className="mt-3 space-y-2.5">
+            {decisions.map((change) => {
+              const oldRx = formatPrescription(change.old_prescription) || "自由安排";
+              const newRx = formatPrescription(change.new_prescription) || (
+                change.to_type === "rest" ? "休息日" : "自由安排"
+              );
+              return (
+                <li
+                  key={change.source_session_id}
+                  className="rounded-md border border-track/25 bg-paper/70 px-2.5 py-2 text-sm leading-snug"
+                >
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="font-mono text-xs font-semibold text-asphalt">
+                      {formatDayMonth(change.scheduled_date)}
+                    </span>
+                    <span className="text-mist line-through decoration-track/70">
+                      {SESSION_NAME[change.from_type]}
+                    </span>
+                    <span className="text-mist" aria-hidden>
+                      →
+                    </span>
+                    <span className="font-medium text-track-deep">
+                      {SESSION_NAME[change.to_type]}
+                    </span>
+                  </div>
+                  <div className="mt-1 space-y-0.5 font-mono text-[11px] text-mist">
+                    <p>
+                      <span className="text-mist/80">原处方 </span>
+                      <span className="line-through">{oldRx}</span>
+                      <span className="mx-1 text-hairline">·</span>
+                      <span className="line-through">{change.old_title}</span>
+                    </p>
+                    <p className="text-track-deep">
+                      <span className="text-mist/80">新处方 </span>
+                      <span className="font-medium">{newRx}</span>
+                      <span className="mx-1 text-hairline">·</span>
+                      <span>{change.new_title}</span>
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
 
           {error ? (

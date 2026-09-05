@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from app.api.dependencies.context import get_request_context
 from app.api.errors import to_http_error
 from app.coaching.domain.workout.models import WorkoutSource, WorkoutType
-from app.coaching.ports.workout_mutation_store import WorkoutMutation
+from app.coaching.ports.workout_mutation_store import WorkoutFeedbackMutation, WorkoutMutation
 from app.common.errors import RunCoachError
 from app.common.events import EventMetadata
 from app.common.lab_clock import LabClock, LabClockError
@@ -86,7 +86,10 @@ async def advance_dev_clock(
 
 
 class DevWorkoutRequest(BaseModel):
-    """补录一堂真实训练：时间由服务端按业务"今天"构造，不允许未来的训练。"""
+    """补录一堂真实训练：时间由服务端按业务"今天"构造，不允许未来的训练。
+
+    反馈字段全部缺省时只记课；任一反馈字段出现则同时写入一条主观反馈。
+    """
 
     workout_type: WorkoutType  # 课种
     distance_m: float | None = None  # 距离（米）
@@ -94,12 +97,18 @@ class DevWorkoutRequest(BaseModel):
     avg_heart_rate: int | None = None  # 平均心率
     max_heart_rate: int | None = None  # 最高心率
     day_offset: int = Field(default=0, le=0)  # 相对业务今天：-1=昨天，0=今天
+    perceived_exertion: int | None = Field(default=None, ge=1, le=10)  # 用力程度 RPE
+    subjective_fatigue: int | None = Field(default=None, ge=1, le=10)  # 主观疲劳
+    soreness: int | None = Field(default=None, ge=1, le=10)  # 酸痛
+    note: str | None = None  # 自由备注
 
 
 class DevWorkoutResponse(BaseModel):
     id: UUID  # 新训练 ID
     started_at: datetime  # 训练开始时间（业务时钟）
     workout_type: str  # 课种
+    feedback_id: UUID | None = None  # 顺带写入的反馈 ID；未提交反馈为空
+    recompute_version: int  # 同步重算后的状态快照版本号
 
 
 @router.post("/api/v1/dev/workouts", response_model=DevWorkoutResponse)
@@ -108,8 +117,12 @@ async def record_dev_workout(
     request: Request,
     request_context: Annotated[RequestContext, Depends(get_request_context)],
 ) -> DevWorkoutResponse:
-    """补录训练：走 WorkoutCommandService canonical 路径，Worker 自动触发重算。"""
+    """补录训练 + 可选内联反馈，并同步重算状态：演示时立刻看到新负荷。"""
     lab = _lab_clock(request)
+    event_metadata = EventMetadata(
+        correlation_id=request_context.request_id,
+        trace_id=request_context.trace_id,
+    )
     try:
         workout = await request.app.state.workout_command_service.record(
             user_id=request_context.user_id,
@@ -122,10 +135,35 @@ async def record_dev_workout(
                 workout_type=body.workout_type,
                 source=WorkoutSource.MANUAL,
             ),
-            event_metadata=EventMetadata(
-                correlation_id=request_context.request_id,
-                trace_id=request_context.trace_id,
-            ),
+            event_metadata=event_metadata,
+        )
+        feedback_id: UUID | None = None
+        has_feedback = (
+            body.perceived_exertion is not None
+            or body.subjective_fatigue is not None
+            or body.soreness is not None
+            or body.note is not None
+        )
+        if has_feedback:
+            feedback = await request.app.state.workout_feedback_command_service.record(
+                user_id=request_context.user_id,
+                workout_id=workout.id,
+                mutation=WorkoutFeedbackMutation(
+                    perceived_exertion=body.perceived_exertion,
+                    subjective_fatigue=body.subjective_fatigue,
+                    soreness=body.soreness,
+                    note=body.note,
+                ),
+                event_metadata=event_metadata,
+            )
+            feedback_id = feedback.id
+        # 记课后同步重算：正常链路由 Worker 的 outbox 事件异步触发，这里只为
+        # 演示即时性提前执行；Worker 随后的重算会命中幂等短路，不会重复投影。
+        result = await request.app.state.athlete_recompute_service.recompute_for_trigger(
+            user_id=request_context.user_id,
+            trigger=None,
+            trigger_available_at=request_context.timestamp,
+            event_metadata=event_metadata,
         )
     except RunCoachError as exc:
         raise to_http_error(exc) from exc
@@ -133,6 +171,8 @@ async def record_dev_workout(
         id=workout.id,
         started_at=workout.started_at,
         workout_type=workout.workout_type.value,
+        feedback_id=feedback_id,
+        recompute_version=result.snapshot.version,
     )
 
 

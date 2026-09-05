@@ -116,7 +116,7 @@ export interface PlanChange {
   source_turn_id: string | null;
   source_run_id: string | null;
   as_of: string;
-  change_type: "reduce_upcoming_load";
+  change_type: "reduce_upcoming_load" | "convert_hard_sessions_to_easy";
   payload: {
     horizon_days: number;
     changes: SessionChange[];
@@ -155,4 +155,29 @@ export interface ThreadMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+}
+
+
+export interface SessionDiffSummary {
+  scheduled_date: string;
+  from_type: SessionType;
+  to_type: SessionType;
+  old_title: string;
+  new_title: string;
+}
+
+/** 对话终态挂载的未解决计划调整摘要（精简版）。 */
+export interface PendingPlanChangeSummary {
+  id: string;
+  change_type: PlanChange["change_type"];
+  reason: string;
+  status: PlanChange["status"];
+  from_plan_version: number;
+  session_diffs: SessionDiffSummary[];
+}
+
+export interface SafetyStatus {
+  ok: boolean;
+  flags: string[];
+  reasons: string[];
 }

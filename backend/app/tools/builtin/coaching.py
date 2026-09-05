@@ -1,4 +1,4 @@
-"""六个正式 read-only Coaching Tools。
+"""正式 read-only Coaching Tools。
 
 全部复用现有 Coaching Application Service 与 Repository Port，
 不直接访问 SQLAlchemy / Session / Repository 实现或 SQL。
@@ -12,11 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.coaching.application.athlete_service import AthleteStateQueryService
 from app.coaching.application.goal_service import GoalQueryService
+from app.coaching.application.plan_adaptation_service import PlanAdaptationService
 from app.coaching.application.plan_service import PlanQueryService
 from app.coaching.application.workout_service import (
     RECENT_WORKOUTS_LIMIT,
     WorkoutQueryService,
 )
+from app.common.errors import NotFoundError
 from app.tools.context import ToolExecutionContext
 from app.tools.registry.definition import ToolDefinition, ToolRisk, ToolSource
 
@@ -82,10 +84,10 @@ class GetRecentWorkoutsTool:
     def args_model(self) -> type[GetRecentWorkoutsArgs]:
         return GetRecentWorkoutsArgs
 
-    async def execute(self, *, args: GetRecentWorkoutsArgs, context: ToolExecutionContext) -> object:
-        workouts = await self._workouts.get_recent_workouts(
-            user_id=context.user_id, days=args.days
-        )
+    async def execute(
+        self, *, args: GetRecentWorkoutsArgs, context: ToolExecutionContext
+    ) -> object:
+        workouts = await self._workouts.get_recent_workouts(user_id=context.user_id, days=args.days)
         # 达到硬上限即报告可能截断，让 Agent 知道结果范围（Tool Result Budget）。
         return {
             "days": args.days,
@@ -119,9 +121,7 @@ class GetWorkoutDetailTool:
         return GetWorkoutDetailArgs
 
     async def execute(self, *, args: GetWorkoutDetailArgs, context: ToolExecutionContext) -> object:
-        return await self._workouts.get_workout(
-            user_id=context.user_id, workout_id=args.workout_id
-        )
+        return await self._workouts.get_workout(user_id=context.user_id, workout_id=args.workout_id)
 
 
 class GetWorkoutFeedbackTool:
@@ -176,7 +176,7 @@ class GetActiveGoalTool:
             description="读取当前用户当前生效的训练目标（比赛日期、距离、目标成绩）。",
             tags=("goal", "target", "race", "目标", "比赛"),
             search_hint="读取当前训练目标与比赛计划",
-            always_on=False,
+            always_on=True,
             risk=ToolRisk.READ_ONLY,
             source=ToolSource.COACHING,
             timeout_s=10.0,
@@ -201,12 +201,11 @@ class GetActivePlanTool:
         return ToolDefinition(
             name="get_active_plan",
             description=(
-                "读取当前用户当前生效的训练计划摘要与近期课次"
-                "（当前周与未来 14 天，最多 20 条）。"
+                "读取当前用户当前生效的训练计划摘要与近期课次（当前周与未来 14 天，最多 20 条）。"
             ),
             tags=("plan", "session", "计划", "课表", "课次"),
             search_hint="读取当前训练计划与接下来安排的课次",
-            always_on=False,
+            always_on=True,
             risk=ToolRisk.READ_ONLY,
             source=ToolSource.COACHING,
             timeout_s=10.0,
@@ -238,7 +237,7 @@ class GetLatestAthleteStateTool:
             ),
             tags=("athlete", "state", "fatigue", "recovery", "状态", "疲劳", "恢复"),
             search_hint="读取系统最近一次评估的跑者疲劳与恢复状态",
-            always_on=False,
+            always_on=True,
             risk=ToolRisk.READ_ONLY,
             source=ToolSource.COACHING,
             timeout_s=10.0,
@@ -252,3 +251,44 @@ class GetLatestAthleteStateTool:
         self, *, args: GetLatestAthleteStateArgs, context: ToolExecutionContext
     ) -> object:
         return await self._athlete.get_latest_athlete_state(user_id=context.user_id)
+
+
+class GetUnresolvedPlanChangeArgs(BaseModel):
+    """无参数：只读取可信上下文中的用户身份。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GetUnresolvedPlanChangeTool:
+    """读取当前未解决的计划调整提案（DRAFT / 待确认）；没有则返回 null。"""
+
+    def __init__(self, *, plan_adaptation_service: PlanAdaptationService) -> None:
+        self._adaptation = plan_adaptation_service
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="get_unresolved_plan_change",
+            description=(
+                "读取当前用户唯一未解决的计划调整提案（草案或待确认）。没有未解决提案时返回 null。"
+            ),
+            tags=("plan_change", "adaptation", "pending", "提案", "待确认", "调整"),
+            search_hint="读取尚未确认或仍在草案中的计划调整提案",
+            always_on=True,
+            risk=ToolRisk.READ_ONLY,
+            source=ToolSource.COACHING,
+            timeout_s=10.0,
+        )
+
+    @property
+    def args_model(self) -> type[GetUnresolvedPlanChangeArgs]:
+        return GetUnresolvedPlanChangeArgs
+
+    async def execute(
+        self, *, args: GetUnresolvedPlanChangeArgs, context: ToolExecutionContext
+    ) -> object:
+        try:
+            return await self._adaptation.get_unresolved(user_id=context.user_id)
+        except NotFoundError:
+            # always-on 查询：无提案时返回 null，避免每轮都变成 tool error。
+            return None

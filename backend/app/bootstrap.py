@@ -12,7 +12,7 @@
 
 本模块负责把接口与具体实现（SqlAlchemy / OpenAI 兼容 API）“接线”到一起。
 测试可以通过 build_container / create_app 的参数注入替身实现。
-Tool 注册在进程启动时由 Provider 确定性完成（System + Coaching 查询 / 分析 / 草案）。
+Tool 注册在进程启动时由 Provider 确定性完成（System + Coaching 查询 / 分析 / 草案 / 安全 + 记忆）。
 """
 
 from collections.abc import AsyncIterator
@@ -40,6 +40,7 @@ from app.api.routes.coaching import router as coaching_router
 from app.api.routes.dev import router as dev_router
 from app.api.routes.health import router as health_router
 from app.api.routes.plan_changes import router as plan_changes_router
+from app.api.routes.safety import router as safety_router
 from app.coaching.application.athlete_recompute_service import AthleteStateRecomputeService
 from app.coaching.application.athlete_service import AthleteStateQueryService
 from app.coaching.application.goal_service import GoalQueryService
@@ -58,6 +59,9 @@ from app.common.lab_clock import LabClock
 from app.infrastructure.config import Settings
 from app.infrastructure.database.repositories.athlete_recompute import (
     SqlAlchemyAthleteStateRecomputeUnitOfWork,
+)
+from app.infrastructure.database.repositories.checkpoint import (
+    SqlAlchemyAgentCheckpointStore,
 )
 from app.infrastructure.database.repositories.coaching import (
     SqlAlchemyAthleteStateRepository,
@@ -107,11 +111,17 @@ from app.memory.application.semantic_projection_service import (
 from app.memory.context_provider import RetrievedMemoryContextProvider
 from app.memory.ports.embedding import EmbeddingProvider
 from app.memory.ports.extractor import EpisodeDetector, SemanticMemoryExtractor
-from app.tools.builtin.providers import CoachingToolProvider, SystemToolProvider
+from app.tools.builtin.providers import (
+    CoachingToolProvider,
+    MemoryToolProvider,
+    SystemToolProvider,
+)
 from app.tools.executor.executor import ToolExecutor
 from app.tools.registry.registry import ToolRegistry
 from app.tools.resolver.resolver import ToolResolver
 from app.tools.runtime import ToolRuntime
+from app.tools.safety.evidence import CoachingSafetyEvidenceSource
+from app.tools.safety.gate import SafetyGate
 from app.tools.search.keyword_search import KeywordToolSearch
 
 
@@ -129,6 +139,7 @@ class AppContainer:
     chat_service: ChatService  # 对话编排与事务边界
     reasoner: Reasoner  # 大模型推理器
     trace_reader: SqlAlchemyAgentTraceReader  # 执行轨迹只读读取（Eval / 审计）
+    checkpoint_store: SqlAlchemyAgentCheckpointStore  # AgentRun 检查点（失败续跑）
     tool_runtime: ToolRuntime  # Tool 治理入口（搜索/解析/执行）
     tool_registry: ToolRegistry  # 工具注册表
     goal_service: GoalQueryService  # 目标查询
@@ -139,12 +150,15 @@ class AppContainer:
     workout_feedback_command_service: WorkoutFeedbackCommandService  # 训练反馈写入
     athlete_recompute_service: AthleteStateRecomputeService  # 跑者状态重算
     plan_adaptation_service: PlanAdaptationService  # 计划调整（提案生成/确认）
-    terminal_turn_finalization_service: TerminalTurnFinalizationService  # Turn 终态收尾（驱动计划适配）
+    terminal_turn_finalization_service: (
+        TerminalTurnFinalizationService  # Turn 终态收尾（驱动计划适配）
+    )
     training_analysis_service: TrainingAnalysisService  # 训练负荷分析
     semantic_memory_projection_service: SemanticMemoryProjectionService  # 语义记忆投影
     episode_projection_service: EpisodeProjectionService  # 情节记忆投影
     memory_retrieval_service: MemoryRetrievalService  # 记忆相似检索
     memory_lifecycle_service: MemoryLifecycleService  # 记忆生命周期（过期/取代）
+    safety_gate: SafetyGate  # 教练安全闸门（执行拦截与状态查询共用）
 
 
 def _default_clock(settings: Settings) -> Clock:
@@ -179,9 +193,7 @@ def build_container(
     activation_store = SqlAlchemyPlanActivationStore(sessions, outbox)
     workout_service = WorkoutQueryService(workout_repo, clock)
     workout_command_service = WorkoutCommandService(workout_mutation_store, clock)
-    workout_feedback_command_service = WorkoutFeedbackCommandService(
-        workout_mutation_store, clock
-    )
+    workout_feedback_command_service = WorkoutFeedbackCommandService(workout_mutation_store, clock)
     goal_service = GoalQueryService(SqlAlchemyGoalRepository(sessions))
     plan_service = PlanQueryService(plan_repo)
     athlete_service = AthleteStateQueryService(athlete_repo)
@@ -206,6 +218,7 @@ def build_container(
     )
     trace_recorder = SqlAlchemyAgentTraceRecorder(sessions, clock)
     trace_reader = SqlAlchemyAgentTraceReader(sessions)
+    checkpoint_store = SqlAlchemyAgentCheckpointStore(sessions)
 
     if settings.memory_embedding_dimensions != 1536:
         # 维度是 Phase 4 持久化合同：pgvector 列按 1536 建，不允许随意改
@@ -266,10 +279,17 @@ def build_container(
     search = KeywordToolSearch()
     registry = ToolRegistry(search=search)
     resolver = ToolResolver(registry=registry)
-    executor = ToolExecutor(registry=registry, resolver=resolver)
+    # 教练安全闸门：DRAFT/MUTATING 执行前硬拦截；安全状态查询共用同一取证。
+    safety_gate = SafetyGate(
+        evidence=CoachingSafetyEvidenceSource(
+            athlete_service=athlete_service,
+            workout_service=workout_service,
+        )
+    )
+    executor = ToolExecutor(registry=registry, resolver=resolver, safety_gate=safety_gate)
     tool_runtime = ToolRuntime(registry=registry, resolver=resolver, executor=executor)
 
-    # 启动时确定性注册：System（search_tools）+ Coaching（查询 / 分析 / 草案）。
+    # 启动时确定性注册：System（search_tools）+ Coaching（查询 / 分析 / 草案 / 安全）+ 记忆。
     for provider in (
         SystemToolProvider(search=search, resolver=resolver),
         CoachingToolProvider(
@@ -279,14 +299,16 @@ def build_container(
             athlete_service=athlete_service,
             analysis_service=analysis_service,
             plan_adaptation_service=plan_adaptation_service,
+            safety_gate=safety_gate,
         ),
+        MemoryToolProvider(memory_retrieval_service=memory_retrieval_service),
     ):
         for tool in provider.tools():
             registry.register(tool)
 
     assembler = ContextAssembler(
         working_context_provider=DomainWorkingContextProvider(
-            goal_service, plan_service, athlete_service
+            goal_service, plan_service, athlete_service, workout_service
         ),
         conversation_context_provider=SqlConversationContextProvider(conversation_reader),
         memory_context_provider=RetrievedMemoryContextProvider(memory_retrieval_service),
@@ -316,8 +338,17 @@ def build_container(
         lifecycle=lifecycle,
         trace_recorder=trace_recorder,
         max_steps=settings.agent_max_steps,
+        checkpoint_store=checkpoint_store,
+        clock=clock,
     )
-    chat_service = ChatService(conversation_store, runtime, lifecycle)
+    # ChatService 挂检查点（失败续跑）与计划调整服务（终态挂载未解决提案 CTA）。
+    chat_service = ChatService(
+        conversation_store,
+        runtime,
+        lifecycle,
+        checkpoint_store=checkpoint_store,
+        plan_adaptation_service=plan_adaptation_service,
+    )
     return AppContainer(
         settings=settings,
         clock=clock,
@@ -329,6 +360,7 @@ def build_container(
         chat_service=chat_service,
         reasoner=reasoner,
         trace_reader=trace_reader,
+        checkpoint_store=checkpoint_store,
         tool_runtime=tool_runtime,
         tool_registry=registry,
         goal_service=goal_service,
@@ -345,6 +377,7 @@ def build_container(
         episode_projection_service=episode_projection_service,
         memory_retrieval_service=memory_retrieval_service,
         memory_lifecycle_service=memory_lifecycle_service,
+        safety_gate=safety_gate,
     )
 
 
@@ -381,9 +414,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Lab 时钟在启动期拉取一次共享值：Redis 不可达立即失败，不带病运行。
-        lab_clock = (
-            app.state.clock if isinstance(app.state.clock, LabClock) else None
-        )
+        lab_clock = app.state.clock if isinstance(app.state.clock, LabClock) else None
         if lab_clock is not None:
             await lab_clock.start()
         yield
@@ -403,6 +434,7 @@ def create_app(
     app.state.conversation_reader = container.conversation_reader
     app.state.chat_service = container.chat_service
     app.state.trace_reader = container.trace_reader
+    app.state.checkpoint_store = container.checkpoint_store
     app.state.tool_runtime = container.tool_runtime
     app.state.tool_registry = container.tool_registry
     app.state.goal_service = container.goal_service
@@ -418,9 +450,11 @@ def create_app(
     app.state.episode_projection_service = container.episode_projection_service
     app.state.memory_retrieval_service = container.memory_retrieval_service
     app.state.memory_lifecycle_service = container.memory_lifecycle_service
+    app.state.safety_gate = container.safety_gate
     app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(plan_changes_router)
+    app.include_router(safety_router)
     app.include_router(coaching_router)
     if container.settings.enable_scenario_lab:
         # Scenario Lab 只在显式开启时暴露：生产构建不注册任何 /dev 路由。

@@ -10,8 +10,8 @@ from app.coaching.contracts.durable_events import (
     PlanChangeConfirmedV1,
     new_plan_change_confirmed_event,
 )
-from app.coaching.domain.plan.models import PlanChangeStatus, PlanStatus, SessionType
-from app.coaching.domain.plan.validator import validate_reduce_upcoming_load_activation
+from app.coaching.domain.plan.models import PlanChangeStatus, PlanStatus
+from app.coaching.domain.plan.validator import validate_plan_change_activation
 from app.coaching.ports.plan_activation_store import PlanActivationResult
 from app.common.errors import ConflictError, DomainError, NotFoundError
 from app.common.events import EventMetadata
@@ -122,7 +122,7 @@ class SqlAlchemyPlanActivationStore:
                     )
                 ).all()
                 base_sessions = [session_from_row(row) for row in session_rows]
-                validate_reduce_upcoming_load_activation(
+                validate_plan_change_activation(
                     user_id=user_id,
                     plan_change=plan_change,
                     active_plan=active_plan,
@@ -166,15 +166,15 @@ class SqlAlchemyPlanActivationStore:
                             )
                         )
                     else:
-                        # 被替换的课次：降载为休息课并采用提案中的新标题
+                        # 被替换的课次：采用提案中的目标课型 / 标题 / 处方
                         new_session_rows.append(
                             PlannedSessionRow(
                                 id=new_id(),
                                 plan_id=new_plan_id,
                                 scheduled_date=replacement.scheduled_date,
-                                session_type=SessionType.REST.value,
+                                session_type=replacement.to_type.value,
                                 title=replacement.new_title,
-                                prescription={},
+                                prescription=dict(replacement.new_prescription),
                             )
                         )
                 session.add_all(new_session_rows)

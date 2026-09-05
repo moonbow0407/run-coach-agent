@@ -8,6 +8,7 @@
  */
 
 import { ApiError, UnauthorizedError } from "@/lib/api";
+import type { PendingPlanChangeSummary } from "@/lib/types";
 import { clearToken, loadToken } from "@/lib/token";
 
 export interface ToolTrace {
@@ -24,7 +25,7 @@ export type StreamEvent =
   | { type: "tool.started"; trace: ToolTrace }
   | { type: "tool.completed"; trace: ToolTrace }
   | { type: "response.delta"; content: string; stepIndex: number }
-  | { type: "run.completed" }
+  | { type: "run.completed"; pendingPlanChange: PendingPlanChangeSummary | null; actions: string[] }
   | { type: "run.failed"; error: string }
   | { type: "run.cancelled" };
 
@@ -40,6 +41,8 @@ interface WireFrame {
   step_index?: number;
   message_id?: string;
   error?: string;
+  pending_plan_change?: PendingPlanChangeSummary | null;
+  actions?: string[];
 }
 
 function translate(event: string, data: WireFrame): StreamEvent | null {
@@ -83,7 +86,11 @@ function translate(event: string, data: WireFrame): StreamEvent | null {
         stepIndex: data.step_index ?? 0,
       };
     case "run.completed":
-      return { type: "run.completed" };
+      return {
+        type: "run.completed",
+        pendingPlanChange: data.pending_plan_change ?? null,
+        actions: data.actions ?? [],
+      };
     case "run.failed":
       return { type: "run.failed", error: data.error ?? "执行失败" };
     case "run.cancelled":

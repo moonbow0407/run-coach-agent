@@ -131,6 +131,16 @@ $env:ADMIN_DATABASE_URL = "postgresql+asyncpg://postgres:<密码>@localhost:5432
 uv run pytest -q
 ```
 
+无真实 LLM 的 CI 友好路径（unit + scenarios，依赖 ScriptedReasoner）：
+
+```bash
+export TEST_DATABASE_URL="postgresql+asyncpg://postgres:<密码>@localhost:5432/run_coach_test"
+export ADMIN_DATABASE_URL="postgresql+asyncpg://postgres:<密码>@localhost:5432/postgres"
+./scripts/ci-test.sh
+```
+
+仅单元测试（无需 Postgres）：`cd backend && uv run pytest tests/unit -q`。
+
 前端验证：
 
 ```powershell

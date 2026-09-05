@@ -117,14 +117,29 @@ export function formatPercent(rate: number | null): string {
   return `${Math.round(rate * 100)}%`;
 }
 
+/** 计划调整类型的中文标签。 */
+export const CHANGE_TYPE_LABEL: Record<
+  "reduce_upcoming_load" | "convert_hard_sessions_to_easy",
+  string
+> = {
+  reduce_upcoming_load: "减负荷",
+  convert_hard_sessions_to_easy: "改轻松",
+};
+
 /** 处方摘录：距离 / 配速等关键字段拼成一行。 */
 export function formatPrescription(prescription: Record<string, unknown>): string {
   const parts: string[] = [];
-  const distance = prescription["distance_m"];
-  if (typeof distance === "number") parts.push(formatDistance(distance));
+  const distanceM = prescription["distance_m"];
+  if (typeof distanceM === "number") parts.push(formatDistance(distanceM));
+  const distanceKm = prescription["distance_km"];
+  if (typeof distanceKm === "number") {
+    parts.push(`${distanceKm % 1 === 0 ? distanceKm.toFixed(0) : distanceKm.toFixed(1)} km`);
+  }
   const duration = prescription["duration_s"];
   if (typeof duration === "number") parts.push(formatDuration(duration));
   const pace = prescription["pace"];
   if (typeof pace === "string") parts.push(`配速 ${pace}`);
+  const intent = prescription["intent"];
+  if (typeof intent === "string" && parts.length === 0) parts.push(intent);
   return parts.join(" · ");
 }

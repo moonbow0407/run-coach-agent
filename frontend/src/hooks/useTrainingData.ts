@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, apiGet } from "@/lib/api";
-import type { ActiveGoal, ActivePlan, AthleteState, PlanChange, WorkoutList } from "@/lib/types";
+import type { ActiveGoal, ActivePlan, AthleteState, PlanChange, SafetyStatus, WorkoutList } from "@/lib/types";
 
 /** 404 表示「还没有这类数据」，按空状态处理而不是错误。 */
 async function getOrNull<T>(path: string): Promise<T | null> {
@@ -29,6 +29,7 @@ export interface TrainingData {
   state: AthleteState | null;
   workouts: WorkoutList | null;
   pendingChange: PlanChange | null;
+  safety: SafetyStatus | null;
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
@@ -44,6 +45,7 @@ export function useTrainingData(enabled: boolean): TrainingData {
   const [state, setState] = useState<AthleteState | null>(null);
   const [workouts, setWorkouts] = useState<WorkoutList | null>(null);
   const [pendingChange, setPendingChange] = useState<PlanChange | null>(null);
+  const [safety, setSafety] = useState<SafetyStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,18 +53,20 @@ export function useTrainingData(enabled: boolean): TrainingData {
     setLoading(true);
     setError(null);
     try {
-      const [goalData, planData, stateData, workoutData, pendingData] = await Promise.all([
+      const [goalData, planData, stateData, workoutData, pendingData, safetyData] = await Promise.all([
         getOrNull<ActiveGoal>("/api/v1/goals/active"),
         getOrNull<ActivePlan>("/api/v1/plans/active"),
         getOrNull<AthleteState>("/api/v1/athlete-state/latest"),
         getOrNull<WorkoutList>("/api/v1/workouts?days=30"),
         getUnresolvedPlanChange(),
+        getOrNull<SafetyStatus>("/api/v1/safety/status"),
       ]);
       setGoal(goalData);
       setPlan(planData);
       setState(stateData);
       setWorkouts(workoutData);
       setPendingChange(pendingData);
+      setSafety(safetyData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法加载训练数据");
     } finally {
@@ -89,12 +93,14 @@ export function useTrainingData(enabled: boolean): TrainingData {
 
   const reloadAfterRun = useCallback(async () => {
     try {
-      const [stateData, pendingData] = await Promise.all([
+      const [stateData, pendingData, safetyData] = await Promise.all([
         getOrNull<AthleteState>("/api/v1/athlete-state/latest"),
         getUnresolvedPlanChange(),
+        getOrNull<SafetyStatus>("/api/v1/safety/status"),
       ]);
       setState(stateData);
       setPendingChange(pendingData);
+      setSafety(safetyData);
     } catch {
       // 局部刷新失败不打断对话；下次整页重载会补上。
     }
@@ -119,6 +125,7 @@ export function useTrainingData(enabled: boolean): TrainingData {
     state,
     workouts,
     pendingChange,
+    safety,
     loading,
     error,
     reload: load,

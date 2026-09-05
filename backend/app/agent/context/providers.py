@@ -13,6 +13,7 @@ from uuid import UUID
 
 from app.agent.context.bundle import (
     AthleteStateView,
+    FeedbackSummaryView,
     GoalView,
     MemoryContextResult,
     MessageView,
@@ -25,6 +26,7 @@ from app.agent.ports.conversation_reader import ConversationReader
 from app.coaching.application.athlete_service import AthleteStateQueryService
 from app.coaching.application.goal_service import GoalQueryService
 from app.coaching.application.plan_service import ActivePlanSummary, PlanQueryService
+from app.coaching.application.workout_service import FeedbackSummary, WorkoutQueryService
 from app.coaching.domain.athlete.models import AthleteStateSnapshot
 from app.coaching.domain.goal.models import TrainingGoal
 
@@ -63,25 +65,30 @@ class MemoryContextProvider(Protocol):
 
 class DomainWorkingContextProvider:
     """生产实现：调用 coaching 域的查询服务组装热上下文。"""
+
     def __init__(
         self,
         goal_service: GoalQueryService,
         plan_service: PlanQueryService,
         athlete_service: AthleteStateQueryService,
+        workout_service: WorkoutQueryService,
     ) -> None:
         self._goals = goal_service
         self._plans = plan_service
         self._athlete = athlete_service
+        self._workouts = workout_service  # 近期反馈摘要，减少搜工具跳转
 
     async def load(self, *, user_id: UUID, as_of: datetime) -> WorkingContext:
-        # 三类信息独立查询：新用户可能目标 / 计划 / 状态尚不存在，对应视图为 None
+        # 目标 / 计划 / 状态 / 近期反馈独立查询：新用户可能部分缺失
         goal = await self._goals.get_active_goal(user_id=user_id)
         plan = await self._plans.get_active_plan_summary(user_id=user_id, as_of=as_of)
         state = await self._athlete.get_latest_athlete_state(user_id=user_id)
+        feedback = await self._workouts.list_recent_feedback_summaries(user_id=user_id)
         return WorkingContext(
             goal=_goal_view(goal) if goal else None,
             active_plan=_plan_summary(plan) if plan else None,
             latest_athlete_state=_state_view(state) if state else None,
+            recent_feedback=tuple(_feedback_view(item) for item in feedback),
             critical_constraints=(),
         )
 
@@ -168,4 +175,15 @@ def _state_view(snapshot: AthleteStateSnapshot) -> AthleteStateView:
         workout_completion_rate=snapshot.workout_completion_rate,
         confidence=snapshot.confidence,
         algorithm_version=snapshot.algorithm_version,
+    )
+
+
+def _feedback_view(summary: FeedbackSummary) -> FeedbackSummaryView:
+    """反馈摘要领域对象 → 上下文视图。"""
+    return FeedbackSummaryView(
+        workout_id=summary.workout_id,
+        started_on=summary.started_on,
+        perceived_exertion=summary.perceived_exertion,
+        subjective_fatigue=summary.subjective_fatigue,
+        note_snippet=summary.note_snippet,
     )

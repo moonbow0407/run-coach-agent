@@ -9,7 +9,7 @@
 import { useState } from "react";
 
 import type { DevClockController } from "@/hooks/useDevClock";
-import { virtualTodayISO } from "@/lib/devClock";
+import { HARD_FEEDBACK_INPUT, virtualTodayISO } from "@/lib/devClock";
 import { formatDateTime, SESSION_NAME } from "@/lib/format";
 import type { SessionType } from "@/lib/types";
 
@@ -161,7 +161,7 @@ function DateJump({ busy, onJump }: { busy: boolean; onJump: (to: string) => voi
   );
 }
 
-/** 补录一堂训练：类型 / 距离 / 时长 / 相对业务今天的偏移，心率留空走估算。 */
+/** 补录一堂训练：类型 / 距离 / 时长 / 相对业务今天的偏移，可勾选顺带提交高强度反馈。 */
 function RecordWorkoutForm({
   busy,
   onSubmit,
@@ -172,12 +172,17 @@ function RecordWorkoutForm({
     distance_m: number;
     duration_s: number;
     day_offset: number;
+    perceived_exertion?: number;
+    subjective_fatigue?: number;
+    soreness?: number;
+    note?: string;
   }) => void;
 }) {
   const [workoutType, setWorkoutType] = useState<SessionType>("easy");
   const [distanceKm, setDistanceKm] = useState("8");
   const [durationMin, setDurationMin] = useState("40");
   const [dayOffset, setDayOffset] = useState("0");
+  const [hardFeedback, setHardFeedback] = useState(false);
 
   const submit = () => {
     const distanceM = Number(distanceKm) * 1000;
@@ -190,6 +195,7 @@ function RecordWorkoutForm({
       distance_m: distanceM,
       duration_s: durationS,
       day_offset: Number(dayOffset),
+      ...(hardFeedback ? HARD_FEEDBACK_INPUT : {}),
     });
   };
 
@@ -238,6 +244,14 @@ function RecordWorkoutForm({
           <option value="-1">昨天</option>
           <option value="-2">前天</option>
         </select>
+        <label className="flex items-center gap-1 font-mono text-[11px] text-mist">
+          <input
+            type="checkbox"
+            checked={hardFeedback}
+            onChange={(event) => setHardFeedback(event.target.checked)}
+          />
+          高强度反馈 RPE9
+        </label>
         <QuickButton label="记录" disabled={busy} onClick={submit} />
       </div>
     </div>

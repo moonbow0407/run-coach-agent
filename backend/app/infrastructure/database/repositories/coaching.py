@@ -131,7 +131,7 @@ class SqlAlchemyWorkoutRepository:
                 # 证据时间上界：as_of 之后创建的反馈不允许进入状态计算。
                 WorkoutFeedbackRow.created_at <= end,
             )
-            # 固定排序让"同一 workout 多条反馈取最新"成为确定性规则。
+            # 固定升序让多课反馈的返回顺序确定，便于投影侧取"最新证据"。
             .order_by(WorkoutFeedbackRow.created_at.asc(), WorkoutFeedbackRow.id.asc())
         )
         async with short_session(self._sessions) as session:

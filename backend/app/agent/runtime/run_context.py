@@ -14,6 +14,7 @@ class AgentTurnCommand:
     """驱动一次 AgentRun 的全部可信信息。
 
     user_id 来自认证系统；current_input 是本轮用户输入原文。
+    resume=True 时从该 run_id 的最新检查点继续 Reason–Act。
     """
 
     user_id: UUID  # 认证系统给出的用户身份，Runtime 不再自行鉴权
@@ -24,3 +25,4 @@ class AgentTurnCommand:
     trace_id: UUID  # 追踪 ID，贯穿日志与执行轨迹
     timestamp: datetime  # 请求的可信时间基准
     current_input: str  # 本轮用户输入原文
+    resume: bool = False  # True=从最新检查点续跑，不再从零开始

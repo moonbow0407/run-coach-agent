@@ -149,33 +149,41 @@ async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
     sessions: async_sessionmaker[AsyncSession],
     clock: FrozenClock,
 ) -> None:
-    """created_at > end 的反馈被排除；同一 workout 多条按 created_at 升序。"""
+    """created_at > end 的反馈被排除；命中反馈按 created_at 升序返回。
+
+    0006 迁移后每课只允许一条反馈（uq 唯一约束），因此改用
+    「三堂课各一条反馈」表达 early / late / 时间穿越三种情形。
+    """
     user_id = await _user(sessions, clock.now())
-    workout_id = new_id()
-    late = new_id()
+    early_workout = new_id()
+    late_workout = new_id()
+    future_workout = new_id()
     early = new_id()
+    late = new_id()
+    future = new_id()
     async with short_session(sessions, commit=True) as session:
-        session.add(
-            WorkoutRow(
-                id=workout_id,
-                user_id=user_id,
-                started_at=AS_OF - timedelta(days=2),
-                distance_m=5000,
-                duration_s=1500,
-                avg_heart_rate=140,
-                max_heart_rate=150,
-                workout_type="easy",
-                source="manual",
-                created_at=clock.now(),
-                updated_at=clock.now(),
+        for workout_id in (early_workout, late_workout, future_workout):
+            session.add(
+                WorkoutRow(
+                    id=workout_id,
+                    user_id=user_id,
+                    started_at=AS_OF - timedelta(days=2),
+                    distance_m=5000,
+                    duration_s=1500,
+                    avg_heart_rate=140,
+                    max_heart_rate=150,
+                    workout_type="easy",
+                    source="manual",
+                    created_at=clock.now(),
+                    updated_at=clock.now(),
+                )
             )
-        )
         await session.flush()
         session.add(
             WorkoutFeedbackRow(
                 id=early,
                 user_id=user_id,
-                workout_id=workout_id,
+                workout_id=early_workout,
                 perceived_exertion=4,
                 subjective_fatigue=3,
                 soreness=3,
@@ -188,7 +196,7 @@ async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
             WorkoutFeedbackRow(
                 id=late,
                 user_id=user_id,
-                workout_id=workout_id,
+                workout_id=late_workout,
                 perceived_exertion=9,
                 subjective_fatigue=9,
                 soreness=9,
@@ -200,9 +208,9 @@ async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
         # as_of 之后才补报的反馈：情况 A 的时间穿越源头。
         session.add(
             WorkoutFeedbackRow(
-                id=new_id(),
+                id=future,
                 user_id=user_id,
-                workout_id=workout_id,
+                workout_id=future_workout,
                 perceived_exertion=10,
                 subjective_fatigue=10,
                 soreness=10,
@@ -213,7 +221,7 @@ async def test_list_feedback_for_workouts_excludes_after_end_and_orders(
         )
     repo = SqlAlchemyWorkoutRepository(sessions)
     feedbacks = await repo.list_feedback_for_workouts(
-        user_id=user_id, workout_ids=[workout_id], end=AS_OF
+        user_id=user_id, workout_ids=[early_workout, late_workout, future_workout], end=AS_OF
     )
     assert [item.id for item in feedbacks] == [early, late]
     assert all(item.created_at <= AS_OF for item in feedbacks)

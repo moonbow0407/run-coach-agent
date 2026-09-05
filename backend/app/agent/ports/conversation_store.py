@@ -46,8 +46,7 @@ class ConversationStore(Protocol):
         user_id: UUID,
         thread_id: UUID | None,
         content: str,
-    ) -> StartedTurn:
-        ...
+    ) -> StartedTurn: ...
 
     # 写入助手消息，Turn / AgentRun 置为 committed
     async def commit_turn(
@@ -57,17 +56,17 @@ class ConversationStore(Protocol):
         turn_id: UUID,
         assistant_content: str,
         event_metadata: EventMetadata,
-    ) -> CommittedTurn:
-        ...
+    ) -> CommittedTurn: ...
 
     # Turn / AgentRun 置为 failed；已写入的用户消息保留
     async def fail_turn(
         self, *, user_id: UUID, turn_id: UUID, event_metadata: EventMetadata
-    ) -> None:
-        ...
+    ) -> None: ...
 
     # Turn / AgentRun 置为 cancelled；用户消息保留，不产生助手消息
     async def cancel_turn(
         self, *, user_id: UUID, turn_id: UUID, event_metadata: EventMetadata
-    ) -> None:
-        ...
+    ) -> None: ...
+
+    # 将 FAILED 的 Turn / AgentRun 重新置为 running，供检查点续跑
+    async def reopen_failed_turn(self, *, user_id: UUID, turn_id: UUID) -> StartedTurn: ...

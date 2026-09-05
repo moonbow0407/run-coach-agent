@@ -24,8 +24,10 @@ class PlanChangeStatus(StrEnum):
 
 
 class PlanChangeType(StrEnum):
-    # v1 唯一支持的调整类型：降低未来窗口的训练负荷。
+    # 降低未来窗口负荷：高强度课 → 休息。
     REDUCE_UPCOMING_LOAD = "reduce_upcoming_load"
+    # 降强度保留出勤：高强度课 → 轻松跑（同日）。
+    CONVERT_HARD_SESSIONS_TO_EASY = "convert_hard_sessions_to_easy"
 
 
 class SessionType(StrEnum):
@@ -71,11 +73,11 @@ class SessionChange:
     source_session_id: UUID  # 被替换的原课次 id
     scheduled_date: date  # 原课次日期（激活校验要求与源一致）
     from_type: SessionType  # 原课型（校验用）
-    to_type: SessionType  # 目标课型（v1 只允许 REST）
+    to_type: SessionType  # 目标课型（reduce→REST；convert→EASY）
     old_title: str  # 原标题（校验用，防止提案基于过期数据）
     new_title: str  # 替换后的标题
     old_prescription: dict[str, Any]  # 原处方（校验用）
-    new_prescription: dict[str, Any]  # 新处方（改为 REST 时为空）
+    new_prescription: dict[str, Any]  # 新处方（REST 为空；EASY 为确定性轻量处方）
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,7 @@ class PlanChange:
     source_turn_id: UUID | None  # 产生本提案的对话轮次（Turn）
     source_run_id: UUID | None  # 产生本提案的 Agent 推理运行（Run）
     as_of: datetime  # 提案基准时间，决定调整窗口
-    change_type: PlanChangeType  # 调整类型（v1 仅降负荷）
+    change_type: PlanChangeType  # 调整类型
     payload: PlanChangePayload  # 结构化课次 diff
     reason: str  # 面向用户的调整理由
     status: PlanChangeStatus  # 生命周期状态

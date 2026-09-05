@@ -23,19 +23,15 @@ async def test_dynamic_tool_discovery_vertical_slice(
     clock,
     sessions,
 ) -> None:
-    """场景 1：初始只可见 search_tools + get_recent_workouts，
+    """场景 1：初始可见 always-on 工具集（含 search_tools / 核心 coaching 查询），
     搜索后解锁新 Schema，完成 detail / feedback 调用并形成 FinalAction。"""
     last_workout_id = slice_seed.workout_ids[-1]
     reasoner = ScriptedReasoner(
         [
             _tool_call("get_recent_workouts", {"days": 7}, "call-1"),
-            _tool_call(
-                "search_tools", {"query": "训练详情 主观反馈", "limit": 2}, "call-2"
-            ),
+            _tool_call("search_tools", {"query": "训练详情 主观反馈", "limit": 2}, "call-2"),
             _tool_call("get_workout_detail", {"workout_id": str(last_workout_id)}, "call-3"),
-            _tool_call(
-                "get_workout_feedback", {"workout_id": str(last_workout_id)}, "call-4"
-            ),
+            _tool_call("get_workout_feedback", {"workout_id": str(last_workout_id)}, "call-4"),
             FinalAction(content="上次间歇课主观反馈为高用力高疲劳。"),
         ]
     )
@@ -50,15 +46,28 @@ async def test_dynamic_tool_discovery_vertical_slice(
 
     assert result.content == "上次间歇课主观反馈为高用力高疲劳。"
 
-    # 第 1 轮：初始可见集合精确为两个 always-on Tool。
+    # 第 1 轮：初始可见集合为 always-on Tool 集合。
     visible_first = {tool.name for tool in reasoner.seen_contexts[0].visible_tools}
-    assert visible_first == {"search_tools", "get_recent_workouts"}
+    assert visible_first == {
+        "search_tools",
+        "get_recent_workouts",
+        "get_active_goal",
+        "get_active_plan",
+        "get_latest_athlete_state",
+        "get_unresolved_plan_change",
+        "get_safety_status",
+    }
 
     # 第 3 轮（search_tools 之后）：detail 与 feedback 的 Schema 出现。
     visible_after_search = {tool.name for tool in reasoner.seen_contexts[2].visible_tools}
     assert visible_after_search == {
         "search_tools",
         "get_recent_workouts",
+        "get_active_goal",
+        "get_active_plan",
+        "get_latest_athlete_state",
+        "get_unresolved_plan_change",
+        "get_safety_status",
         "get_workout_detail",
         "get_workout_feedback",
     }
@@ -72,9 +81,7 @@ async def test_dynamic_tool_discovery_vertical_slice(
 
     # 全部 4 次调用成功。
     observations = [
-        item
-        for item in reasoner.seen_contexts[-1].state.interactions
-        if hasattr(item, "status")
+        item for item in reasoner.seen_contexts[-1].state.interactions if hasattr(item, "status")
     ]
     assert [obs.status for obs in observations] == ["success"] * 4
 
@@ -192,9 +199,7 @@ async def test_run_local_isolation(
         thread_id=None,
         content="帮我找训练详情工具",
     )
-    visible_run1_after_search = {
-        tool.name for tool in reasoner.seen_contexts[1].visible_tools
-    }
+    visible_run1_after_search = {tool.name for tool in reasoner.seen_contexts[1].visible_tools}
     assert "get_workout_detail" in visible_run1_after_search
 
     # 同一线程的下一 Turn：同一 ToolRuntime，新的 AgentRun / ToolSession。
@@ -206,10 +211,16 @@ async def test_run_local_isolation(
     assert app.state.tool_runtime is tool_runtime
     assert first.run_id != second.run_id
 
-    visible_run2_initial = {
-        tool.name for tool in reasoner.seen_contexts[2].visible_tools
+    visible_run2_initial = {tool.name for tool in reasoner.seen_contexts[2].visible_tools}
+    assert visible_run2_initial == {
+        "search_tools",
+        "get_recent_workouts",
+        "get_active_goal",
+        "get_active_plan",
+        "get_latest_athlete_state",
+        "get_unresolved_plan_change",
+        "get_safety_status",
     }
-    assert visible_run2_initial == {"search_tools", "get_recent_workouts"}
 
     # 可执行性同样隔离：猜测上一 Run 已发现的 Tool 得到 tool_not_available。
     guess_observation = reasoner.seen_contexts[3].state.interactions[1]
@@ -247,7 +258,15 @@ async def test_search_unlock_atomicity_and_zero_hits(
 
     # 零命中后可见集合不变（第 2 轮推理时的可见集合）。
     visible_after_zero = {tool.name for tool in reasoner.seen_contexts[1].visible_tools}
-    assert visible_after_zero == {"search_tools", "get_recent_workouts"}
+    assert visible_after_zero == {
+        "search_tools",
+        "get_recent_workouts",
+        "get_active_goal",
+        "get_active_plan",
+        "get_latest_athlete_state",
+        "get_unresolved_plan_change",
+        "get_safety_status",
+    }
 
     # 正常命中：hits 与解锁集合一致（从下一轮可见集合反推）。
     hit_observation = reasoner.seen_contexts[2].state.interactions[3]
@@ -278,9 +297,7 @@ async def test_unregister_invalidates_discovered_tool(
         thread_id=None,
         content="找工具",
     )
-    visible_after_discovery = {
-        tool.name for tool in reasoner.seen_contexts[1].visible_tools
-    }
+    visible_after_discovery = {tool.name for tool in reasoner.seen_contexts[1].visible_tools}
     assert "get_workout_detail" in visible_after_discovery
 
     # 注销后：resolve 不可见、execute 得 tool_not_found、Search 不再返回。

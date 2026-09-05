@@ -19,7 +19,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from app.agent.application.chat_service import ChatService
+from app.agent.application.chat_service import ChatResult, ChatService, PendingPlanChangeData
 from app.agent.lifecycle.dispatcher import LifecycleDispatcher
 from app.agent.lifecycle.events import LifecycleEvent, TurnCancelled, TurnCommitted, TurnFailed
 from app.agent.ports.conversation_reader import ConversationReader
@@ -27,7 +27,10 @@ from app.api.dependencies.context import get_request_context
 from app.api.schemas.chat import (
     ChatRequest,
     ChatResponse,
+    ChatResumeRequest,
     MessageResponse,
+    PendingPlanChangeSummary,
+    SessionDiffSummary,
     ThreadMessagesResponse,
 )
 from app.api.sse import format_sse, map_lifecycle_event
@@ -81,12 +84,24 @@ async def chat(
         )
     except RunCoachError as exc:
         raise _http_error(exc) from exc
-    return ChatResponse(
-        thread_id=result.thread_id,
-        turn_id=result.turn_id,
-        message_id=result.message_id,
-        content=result.content,
-    )
+    return _to_chat_response(result)
+
+
+@router.post("/api/v1/chat/resume", response_model=ChatResponse)
+async def resume_chat(
+    payload: ChatResumeRequest,
+    request_context: Annotated[RequestContext, Depends(get_request_context)],
+    request: Request,
+) -> ChatResponse:
+    """从失败 AgentRun 的最新检查点继续推理并提交最终回答。"""
+    try:
+        result = await _chat_service(request).resume_run(
+            request_context=request_context,
+            run_id=payload.run_id,
+        )
+    except RunCoachError as exc:
+        raise _http_error(exc) from exc
+    return _to_chat_response(result)
 
 
 @router.post("/api/v1/chat/stream")
@@ -192,11 +207,7 @@ async def chat_stream(
                             # ResponseDelta 重复；只补终态帧让前端能收尾重拉历史。
                             yield format_sse(
                                 "run.completed",
-                                {
-                                    "turn_id": str(result.turn_id),
-                                    "run_id": str(result.run_id),
-                                    "message_id": str(result.message_id),
-                                },
+                                _completed_sse_payload(result),
                             )
                         break
                 else:
@@ -206,10 +217,12 @@ async def chat_stream(
                 mapped = map_lifecycle_event(event)
                 if isinstance(event, TurnCommitted):
                     # 正文增量已在此之前经 ResponseDelta 逐帧推送完毕（FIFO 保证
-                    # 先于本帧到达）；这里收割后台任务异常防止 "exception never
-                    # retrieved"，run.completed 的 ids 直接取自事件本身。
-                    await asyncio.gather(task, return_exceptions=True)
-                    if mapped:
+                    # 先于本帧到达）；收割任务结果以挂载 pending_plan_change CTA。
+                    gathered = await asyncio.gather(task, return_exceptions=True)
+                    result = gathered[0] if gathered else None
+                    if isinstance(result, ChatResult):
+                        yield format_sse("run.completed", _completed_sse_payload(result))
+                    elif mapped:
                         yield format_sse(*mapped)
                     break
                 if isinstance(event, (TurnFailed, TurnCancelled)):
@@ -275,6 +288,57 @@ async def list_messages(
             for message in messages
         ],
     )
+
+
+def _to_chat_response(result: ChatResult) -> ChatResponse:
+    """ChatResult → 传输 DTO，含未解决提案 CTA。"""
+    return ChatResponse(
+        thread_id=result.thread_id,
+        turn_id=result.turn_id,
+        message_id=result.message_id,
+        content=result.content,
+        pending_plan_change=_to_pending_summary(result.pending_plan_change),
+        actions=list(result.actions),
+    )
+
+
+def _to_pending_summary(
+    pending: PendingPlanChangeData | None,
+) -> PendingPlanChangeSummary | None:
+    if pending is None:
+        return None
+    return PendingPlanChangeSummary(
+        id=pending.id,
+        change_type=pending.change_type,
+        reason=pending.reason,
+        status=pending.status,
+        from_plan_version=pending.from_plan_version,
+        session_diffs=[
+            SessionDiffSummary(
+                scheduled_date=item.scheduled_date,
+                from_type=item.from_type,
+                to_type=item.to_type,
+                old_title=item.old_title,
+                new_title=item.new_title,
+            )
+            for item in pending.session_diffs
+        ],
+    )
+
+
+def _completed_sse_payload(result: ChatResult) -> dict[str, object]:
+    """run.completed 载荷：基础 ID + 可选 pending_plan_change / actions。"""
+    payload: dict[str, object] = {
+        "turn_id": str(result.turn_id),
+        "run_id": str(result.run_id),
+        "message_id": str(result.message_id),
+        "actions": list(result.actions),
+        "pending_plan_change": None,
+    }
+    summary = _to_pending_summary(result.pending_plan_change)
+    if summary is not None:
+        payload["pending_plan_change"] = summary.model_dump(mode="json")
+    return payload
 
 
 def _http_error(exc: RunCoachError) -> HTTPException:

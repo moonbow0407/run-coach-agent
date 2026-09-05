@@ -17,20 +17,53 @@ import {
   formatRaceDistance,
   formatTargetTime,
 } from "@/lib/format";
-import type { ActiveGoal, AthleteState } from "@/lib/types";
+import type { ActiveGoal, AthleteState, SafetyStatus } from "@/lib/types";
 
 const FATIGUE_LABEL = { low: "低", moderate: "中", high: "高" } as const;
 const RECOVERY_LABEL = { poor: "差", fair: "一般", good: "好" } as const;
+
+const FLAG_LABEL: Record<string, string> = {
+  high_fatigue_poor_recovery: "疲劳偏高",
+  injury_keywords: "伤痛信号",
+};
+
+/** 安全约束芯片：绿点表示无限制，黄点表示当前被安全策略约束的信号。 */
+function SafetyChip({ safety }: { safety: SafetyStatus }) {
+  if (safety.ok) {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full border border-asphalt/25 bg-paper px-2.5 py-1 font-mono text-[11px] font-medium text-asphalt"
+        title="当前无安全约束"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-[#2f7d4a]" aria-hidden />
+        安全 · 正常
+      </span>
+    );
+  }
+  const labels = safety.flags.map((flag) => FLAG_LABEL[flag] ?? flag);
+  const title = safety.reasons.join("；") || labels.join("、");
+  return (
+    <span
+      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-track/50 bg-track-wash px-2.5 py-1 font-mono text-[11px] font-medium text-track-deep"
+      title={title}
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-track" aria-hidden />
+      <span className="truncate">{labels.join(" · ") || "需关注"}</span>
+    </span>
+  );
+}
 
 // 对话流式期间父组件高频重渲染：goal / state 不变时跳过页头重绘。
 export const DashboardHeader = memo(function DashboardHeader({
   goal,
   state,
   today,
+  safety,
 }: {
   goal: ActiveGoal | null;
   state: AthleteState | null;
   today?: string; // 业务今天（YYYY-MM-DD）；lab 开启时来自虚拟时钟
+  safety?: SafetyStatus | null; // 教练安全约束快照；null = 接口不可用
 }) {
   const raceName = formatRaceDistance(goal?.race_distance_m ?? null);
   const countdown = goal?.race_date ? daysUntil(goal.race_date, today) : null;
@@ -72,6 +105,7 @@ export const DashboardHeader = memo(function DashboardHeader({
       <div className="mx-auto max-w-6xl px-5 pb-4">
         {state ? (
           <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
+            {safety ? <SafetyChip safety={safety} /> : null}
             <Metric
               label="疲劳"
               value={state.fatigue_level ? FATIGUE_LABEL[state.fatigue_level] : "—"}
@@ -95,9 +129,12 @@ export const DashboardHeader = memo(function DashboardHeader({
             ) : null}
           </div>
         ) : (
-          <p className="pb-1 text-sm text-mist">
-            教练还没有评估过你的状态——提交一次训练反馈后就会生成。
-          </p>
+          <div className="flex flex-wrap items-center gap-3 pb-1">
+            {safety ? <SafetyChip safety={safety} /> : null}
+            <p className="text-sm text-mist">
+              教练还没有评估过你的状态——提交一次训练反馈后就会生成。
+            </p>
+          </div>
         )}
       </div>
     </header>

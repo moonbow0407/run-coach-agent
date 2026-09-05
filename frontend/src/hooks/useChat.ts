@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiGet, UnauthorizedError } from "@/lib/api";
-import type { ThreadMessage } from "@/lib/types";
+import type { PendingPlanChangeSummary, ThreadMessage } from "@/lib/types";
 import { clearThreadId, loadThreadId, saveThreadId } from "@/lib/token";
 import { streamChat, type StreamEvent, type ToolTrace } from "@/lib/sse";
 
@@ -41,6 +41,8 @@ export function useChat(
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [run, setRun] = useState<LiveRun>(IDLE_RUN);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [pendingPlanChange, setPendingPlanChange] = useState<PendingPlanChangeSummary | null>(null);
+  const [planChangeActions, setPlanChangeActions] = useState<string[]>([]);
   // 同一轮运行期间可能重复触发 onRunCompleted 的保护由调用方决定，这里只保证回调最新。
   const completedRef = useRef(onRunCompleted);
   completedRef.current = onRunCompleted;
@@ -95,6 +97,8 @@ export function useChat(
     setMessages([]);
     setRun(IDLE_RUN);
     setHistoryError(null);
+    setPendingPlanChange(null);
+    setPlanChangeActions([]);
   }, []);
 
   const send = useCallback(
@@ -124,7 +128,11 @@ export function useChat(
               : event.content;
           streamedStep = event.stepIndex;
         }
-        if (event.type === "run.completed") runCompleted = true;
+        if (event.type === "run.completed") {
+          runCompleted = true;
+          setPendingPlanChange(event.pendingPlanChange);
+          setPlanChangeActions(event.actions);
+        }
         // 线程 id 落库是副作用，必须放在 updater 之外：updater 要保持纯函数。
         if (event.type === "run.started") {
           saveThreadId(event.threadId);
@@ -225,5 +233,21 @@ export function useChat(
     [run.phase, threadId, onUnauthorized],
   );
 
-  return { threadId, messages, run, historyError, send, cancel, startNewThread };
+  const clearPendingPlanChange = useCallback(() => {
+    setPendingPlanChange(null);
+    setPlanChangeActions([]);
+  }, []);
+
+  return {
+    threadId,
+    messages,
+    run,
+    historyError,
+    pendingPlanChange,
+    planChangeActions,
+    clearPendingPlanChange,
+    send,
+    cancel,
+    startNewThread,
+  };
 }

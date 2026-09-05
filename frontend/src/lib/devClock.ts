@@ -21,12 +21,18 @@ export interface DevWorkoutInput {
   avg_heart_rate?: number;
   max_heart_rate?: number;
   day_offset?: number; // 相对业务今天：-1=昨天，0=今天
+  perceived_exertion?: number; // 内联反馈：用力程度 RPE（1–10）
+  subjective_fatigue?: number; // 内联反馈：主观疲劳
+  soreness?: number; // 内联反馈：酸痛
+  note?: string; // 内联反馈：自由备注
 }
 
 interface DevWorkoutRecord {
   id: string;
   started_at: string;
   workout_type: string;
+  feedback_id: string | null; // 顺带写入的反馈 ID；未提交反馈为空
+  recompute_version: number; // 后端同步重算后的快照版本
 }
 
 interface DevRecomputeResult {
@@ -59,13 +65,15 @@ export function recomputeDevState(): Promise<DevRecomputeResult> {
 }
 
 /** 一键高强度反馈（对齐 seed 话术）：RPE9 / 疲劳9 / 酸痛8。 */
+export const HARD_FEEDBACK_INPUT = {
+  perceived_exertion: 9,
+  subjective_fatigue: 9,
+  soreness: 8,
+  note: "最后两组间歇明显掉速，今天腿很酸",
+} as const;
+
 export function postHardFeedback(workoutId: string): Promise<unknown> {
-  return apiPost(`/api/v1/workouts/${workoutId}/feedback`, {
-    perceived_exertion: 9,
-    subjective_fatigue: 9,
-    soreness: 8,
-    note: "最后两组间歇明显掉速，今天腿很酸",
-  });
+  return apiPost(`/api/v1/workouts/${workoutId}/feedback`, HARD_FEEDBACK_INPUT);
 }
 
 export function applyDevScenario(

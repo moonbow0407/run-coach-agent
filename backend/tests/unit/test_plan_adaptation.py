@@ -7,7 +7,10 @@ from uuid import uuid4
 import pytest
 
 from app.coaching.domain.athlete.models import AthleteStateSnapshot, FatigueLevel, RecoveryLevel
-from app.coaching.domain.plan.adaptation import generate_reduce_upcoming_load
+from app.coaching.domain.plan.adaptation import (
+    generate_convert_hard_sessions_to_easy,
+    generate_reduce_upcoming_load,
+)
 from app.coaching.domain.plan.models import (
     PlanChange,
     PlanChangePayload,
@@ -329,16 +332,12 @@ def test_validator_rejects_tampered_old_fields() -> None:
     tampered_change = replace(first, old_title="被篡改的标题")
     tampered = replace(
         change,
-        payload=replace(
-            change.payload, changes=(tampered_change, *change.payload.changes[1:])
-        ),
+        payload=replace(change.payload, changes=(tampered_change, *change.payload.changes[1:])),
     )
     with pytest.raises(DomainError, match="old_title_mismatch"):
         _validate(tampered, plan, state, sessions)
 
-    tampered_prescription = replace(
-        first, old_prescription={"pace": "被篡改的处方"}
-    )
+    tampered_prescription = replace(first, old_prescription={"pace": "被篡改的处方"})
     tampered = replace(
         change,
         payload=replace(
@@ -351,9 +350,7 @@ def test_validator_rejects_tampered_old_fields() -> None:
     tampered_new_title = replace(first, new_title="任意标题")
     tampered = replace(
         change,
-        payload=replace(
-            change.payload, changes=(tampered_new_title, *change.payload.changes[1:])
-        ),
+        payload=replace(change.payload, changes=(tampered_new_title, *change.payload.changes[1:])),
     )
     with pytest.raises(DomainError, match="new_title_mismatch"):
         _validate(tampered, plan, state, sessions)
@@ -377,3 +374,124 @@ def test_validator_recheck_safety_precondition() -> None:
     )
     with pytest.raises(DomainError, match="state_does_not_require_v1_reduction"):
         _validate(change, plan, moderate_state, sessions)
+
+
+def test_convert_tempo_and_interval_become_easy_in_window() -> None:
+    """验证：窗口内节奏/间歇改为轻松跑，保留日期与确定性处方。"""
+    tempo = _session(
+        scheduled_date=date(2026, 8, 31),
+        session_type=SessionType.TEMPO,
+        title="第 6 周节奏跑",
+        prescription={"pace": "4:40", "distance_km": 8},
+    )
+    interval = _session(
+        scheduled_date=date(2026, 9, 2),
+        session_type=SessionType.INTERVAL,
+        title="间歇",
+    )
+    easy = _session(scheduled_date=date(2026, 8, 29), session_type=SessionType.EASY)
+    result = generate_convert_hard_sessions_to_easy(
+        as_of=AS_OF,
+        horizon_days=7,
+        sessions=[tempo, interval, easy],
+        fatigue_level=FatigueLevel.HIGH,
+        recovery_level=RecoveryLevel.FAIR,
+    )
+    changed = {item.source_session_id: item for item in result.payload.changes}
+    assert tempo.id in changed
+    assert interval.id in changed
+    assert easy.id not in changed
+    assert changed[tempo.id].to_type is SessionType.EASY
+    assert changed[tempo.id].scheduled_date == tempo.scheduled_date
+    assert changed[tempo.id].new_title == "轻松跑（调整自：第 6 周节奏跑）"
+    assert changed[tempo.id].new_prescription == {"intent": "easy", "distance_km": 8}
+    assert result.change_type is PlanChangeType.CONVERT_HARD_SESSIONS_TO_EASY
+
+
+def test_convert_race_is_not_modified() -> None:
+    """验证：转轻松跑策略也不改比赛课。"""
+    race = _session(scheduled_date=date(2026, 8, 30), session_type=SessionType.RACE)
+    tempo = _session(scheduled_date=date(2026, 8, 31), session_type=SessionType.TEMPO)
+    result = generate_convert_hard_sessions_to_easy(
+        as_of=AS_OF,
+        horizon_days=7,
+        sessions=[race, tempo],
+        fatigue_level=None,
+        recovery_level=RecoveryLevel.POOR,
+    )
+    assert result.race_session_not_modified is True
+    assert all(item.source_session_id != race.id for item in result.payload.changes)
+
+
+def test_convert_validator_accepts_generated_payload() -> None:
+    """验证：convert 生成器产出可通过激活校验。"""
+    from app.coaching.domain.plan.validator import (
+        validate_convert_hard_sessions_to_easy_activation,
+    )
+
+    plan_id = new_id()
+    user_id = uuid4()
+    tempo = _session(
+        scheduled_date=date(2026, 8, 31),
+        session_type=SessionType.TEMPO,
+        title="节奏跑",
+        plan_id=plan_id,
+        prescription={"distance_km": 10, "pace": "4:50"},
+    )
+    plan = TrainingPlan(
+        id=plan_id,
+        user_id=user_id,
+        version=1,
+        goal_id=None,
+        status=PlanStatus.ACTIVE,
+        starts_on=date(2026, 7, 20),
+        ends_on=date(2026, 9, 27),
+        created_at=AS_OF,
+    )
+    state = AthleteStateSnapshot(
+        id=new_id(),
+        user_id=user_id,
+        version=2,
+        as_of=AS_OF,
+        fatigue_level=FatigueLevel.HIGH,
+        recovery_level=RecoveryLevel.FAIR,
+        recent_training_load=None,
+        workout_completion_rate=None,
+        training_load_coverage=0.3,
+        signals=(),
+        confidence=0.8,
+        algorithm_version="phase3.v1",
+        created_at=AS_OF,
+    )
+    generated = generate_convert_hard_sessions_to_easy(
+        as_of=AS_OF,
+        horizon_days=7,
+        sessions=[tempo],
+        fatigue_level=FatigueLevel.HIGH,
+        recovery_level=RecoveryLevel.FAIR,
+    )
+    change = PlanChange(
+        id=new_id(),
+        user_id=user_id,
+        from_plan_id=plan.id,
+        from_plan_version=1,
+        based_on_state_id=state.id,
+        based_on_state_version=2,
+        source_turn_id=new_id(),
+        source_run_id=new_id(),
+        as_of=AS_OF,
+        change_type=PlanChangeType.CONVERT_HARD_SESSIONS_TO_EASY,
+        payload=generated.payload,
+        reason="转轻松跑",
+        status=PlanChangeStatus.PENDING_CONFIRMATION,
+        created_at=AS_OF,
+        resolved_at=None,
+        resulting_plan_id=None,
+    )
+    validate_convert_hard_sessions_to_easy_activation(
+        user_id=user_id,
+        plan_change=change,
+        active_plan=plan,
+        latest_state=state,
+        base_sessions=[tempo],
+    )

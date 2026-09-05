@@ -7,14 +7,12 @@
     3. Action 是 ToolCallAction → 通过可信执行上下文执行工具，
        把 Observation 记回 ReasoningState，再进入下一轮 Reason。
 
-Runtime 自己不决定“该调哪个工具”——那是 Reasoner 基于证据的职责；
-这里只提供运行保护（步数上限、取消检查）、事件发布和执行轨迹记录。
-Tool 细节全部委托 ToolRuntime，本类不接触 Registry / Search / Resolver
-或工具参数模型。
+成功 Observation 后写入轻量检查点，失败后续跑可从 step_index 继续。
 """
 
 import asyncio
 from time import perf_counter
+from typing import Any
 from uuid import uuid4
 
 from app.agent.context.assembler import ContextAssembler
@@ -30,12 +28,16 @@ from app.agent.lifecycle.events import (
     ToolStarted,
 )
 from app.agent.models.action import FinalAction, ToolCallAction
+from app.agent.models.checkpoint import new_checkpoint
+from app.agent.models.observation import Observation
+from app.agent.ports.checkpoint_store import AgentCheckpointStore
 from app.agent.ports.trace_recorder import AgentTraceRecorder
 from app.agent.reasoning.models import ReasoningContext
 from app.agent.reasoning.reasoner import Reasoner
 from app.agent.reasoning.state import ReasoningState
 from app.agent.runtime.run_context import AgentTurnCommand
-from app.common.errors import AgentRuntimeError, TurnCancelled
+from app.common.clock import Clock
+from app.common.errors import AgentRuntimeError, NotFoundError, TurnCancelled
 from app.tools.context import ToolExecutionContext
 from app.tools.runtime import ToolRuntime
 
@@ -43,7 +45,9 @@ from app.tools.runtime import ToolRuntime
 class AgentRuntime:
     """只负责 Context → Reason → Action → Observation → Reason → Final。
 
-    不创建 Turn / AgentRun，不提交 Conversation，不读取 RunStep 驱动决策。
+    Runtime 自己不决定"该调哪个工具"——那是 Reasoner 基于证据的职责；
+    Tool 细节全部委托 ToolRuntime，本类不接触 Registry / Search / Resolver。
+    成功 Observation 后写入检查点，失败后可从 step_index 续跑。
     """
 
     def __init__(
@@ -54,6 +58,8 @@ class AgentRuntime:
         lifecycle: LifecycleDispatcher,
         trace_recorder: AgentTraceRecorder,
         max_steps: int,
+        checkpoint_store: AgentCheckpointStore | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._reasoner = reasoner  # 推理器：决定下一步回复还是调工具
         self._assembler = context_assembler  # 上下文装配器
@@ -61,6 +67,8 @@ class AgentRuntime:
         self._lifecycle = lifecycle  # 生命周期事件分发
         self._trace = trace_recorder  # 执行轨迹记录端口
         self._max_steps = max_steps  # 单次 Run 的推理步数上限（运行保护）
+        self._checkpoints = checkpoint_store  # 可选：成功 Observation 后落检查点
+        self._clock = clock  # 检查点时间戳来源；测试注入 FrozenClock
 
     async def run(self, command: AgentTurnCommand) -> FinalAction:
         """执行一次完整推理循环，返回最终回答，交由上层提交对话。"""
@@ -73,13 +81,14 @@ class AgentRuntime:
             )
         )
         # 装配本轮完整上下文：热上下文 + 已提交历史 + 长期记忆
+        input_text = command.current_input
         bundle = await self._assembler.assemble(
             ContextAssemblyRequest(
                 user_id=command.user_id,
                 thread_id=command.thread_id,
                 turn_id=command.turn_id,
                 timestamp=command.timestamp,
-                current_input=command.current_input,
+                current_input=input_text,
             )
         )
         await self._lifecycle.publish(
@@ -90,17 +99,46 @@ class AgentRuntime:
                 run_id=command.run_id,
             )
         )
-        # 装配成功后、首次推理前记录上下文清单：完整轨迹为 context → reasoning → … → final
-        await self._trace.record_context(
-            run_id=command.run_id,
-            manifest=bundle.context_manifest(),
-        )
 
         # 每个 AgentRun 一个 ToolSession：Run-local Discovery 不跨 Turn 复用，
         # Run 结束后随局部变量直接销毁。
         session = self._tool_runtime.create_session(run_id=command.run_id)
         state = ReasoningState()  # Run 内工作状态：工具调用与结果的交互序列
         step_index = 0
+
+        if command.resume:
+            # 续跑：用检查点恢复工具轨迹与 Discovery，跳过已完成的步。
+            if self._checkpoints is None:
+                raise AgentRuntimeError("未配置检查点存储，无法续跑")
+            checkpoint = await self._checkpoints.get_latest(
+                user_id=command.user_id, run_id=command.run_id
+            )
+            if checkpoint is None:
+                raise NotFoundError("没有可恢复的检查点")
+            input_text = checkpoint.current_input
+            # 续跑时按检查点原文重新装配，保证与失败前同一用户输入。
+            bundle = await self._assembler.assemble(
+                ContextAssemblyRequest(
+                    user_id=command.user_id,
+                    thread_id=command.thread_id,
+                    turn_id=command.turn_id,
+                    timestamp=command.timestamp,
+                    current_input=input_text,
+                )
+            )
+            state = ReasoningState(
+                interactions=[_deserialize_interaction(item) for item in checkpoint.interactions]
+            )
+            if checkpoint.discovered_tool_names:
+                session.unlock(list(checkpoint.discovered_tool_names))
+            step_index = checkpoint.step_index
+        else:
+            # 全新 Run：装配成功后记录上下文清单。
+            await self._trace.record_context(
+                run_id=command.run_id,
+                manifest=bundle.context_manifest(),
+            )
+
         while True:
             # 运行保护：步数超限说明模型可能在无限循环调工具，强制失败
             if step_index >= self._max_steps:
@@ -123,6 +161,7 @@ class AgentRuntime:
                     step_index=step_index,
                 )
             )
+
             # 文本增量回调：流式产出最终回答时逐片段经生命周期总线转发给
             # SSE 等监听方；仅进程内事件，不持久化。闭包按步新建，并用默认
             # 参数绑定当前步序，避免读到循环后续步的 step_index。
@@ -225,3 +264,51 @@ class AgentRuntime:
                     duration_ms=duration_ms,
                 )
             )
+            # 成功拿到 Observation 后落检查点：崩溃时可从下一 Reason 步续跑。
+            await self._save_checkpoint(
+                command=command,
+                step_index=step_index,
+                current_input=input_text,
+                state=state,
+                discovered_tool_names=list(session.discovered_names()),
+            )
+
+    async def _save_checkpoint(
+        self,
+        *,
+        command: AgentTurnCommand,
+        step_index: int,
+        current_input: str,
+        state: ReasoningState,
+        discovered_tool_names: list[str],
+    ) -> None:
+        if self._checkpoints is None or self._clock is None:
+            return
+        checkpoint = new_checkpoint(
+            run_id=command.run_id,
+            turn_id=command.turn_id,
+            user_id=command.user_id,
+            thread_id=command.thread_id,
+            step_index=step_index,
+            current_input=current_input,
+            interactions=[_serialize_interaction(item) for item in state.interactions],
+            discovered_tool_names=discovered_tool_names,
+            created_at=self._clock.now(),
+        )
+        await self._checkpoints.save(checkpoint)
+
+
+def _serialize_interaction(item: ToolCallAction | Observation) -> dict[str, Any]:
+    if isinstance(item, ToolCallAction):
+        return {"kind": "tool_call", **item.model_dump()}
+    return {"kind": "observation", **item.model_dump()}
+
+
+def _deserialize_interaction(data: dict[str, Any]) -> ToolCallAction | Observation:
+    kind = data.get("kind")
+    payload = {key: value for key, value in data.items() if key != "kind"}
+    if kind == "tool_call":
+        return ToolCallAction.model_validate(payload)
+    if kind == "observation":
+        return Observation.model_validate(payload)
+    raise AgentRuntimeError(f"未知检查点交互类型: {kind!r}")

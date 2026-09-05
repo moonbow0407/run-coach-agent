@@ -17,3 +17,4 @@ class ToolErrorCode(StrEnum):
     TOOL_NOT_AUTHORIZED = "tool_not_authorized"  # 风险等级未获模型执行授权
     TOOL_TIMEOUT = "tool_timeout"  # 执行超过定义的超时上限
     TOOL_EXECUTION_FAILED = "tool_execution_failed"  # 执行期应用错误或未知异常
+    SAFETY_BLOCKED = "safety_blocked"  # 教练安全策略硬拦截（疲劳/伤痛等）
