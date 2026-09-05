@@ -49,6 +49,13 @@ class WorkoutFeedbackRow(Base):
     """用户对某次训练的主观反馈（自感用力 / 疲劳 / 酸痛 / 备注），量表统一 1–10。"""
 
     __tablename__ = "workout_feedback"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "workout_id",
+            name="uq_workout_feedback_user_workout",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)  # 反馈归属的跑者

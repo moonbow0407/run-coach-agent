@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.coaching.contracts.durable_events import (
@@ -18,7 +19,7 @@ from app.coaching.ports.workout_mutation_store import (
     WorkoutFeedbackMutation,
     WorkoutMutation,
 )
-from app.common.errors import NotFoundError
+from app.common.errors import ConflictError, NotFoundError
 from app.common.events import EventMetadata
 from app.infrastructure.database.mappers import feedback_from_row, workout_from_row
 from app.infrastructure.database.models.coaching import WorkoutFeedbackRow, WorkoutRow
@@ -145,7 +146,11 @@ class SqlAlchemyWorkoutMutationStore:
                 available_at=available_at,
                 event_metadata=event_metadata,
             )
-            await session.flush()
+            try:
+                await session.flush()
+            except IntegrityError as exc:
+                # 唯一约束 (user_id, workout_id)：并发首次提交冲突，交由上层改走 update。
+                raise ConflictError("workout_feedback_already_exists") from exc
             return feedback_from_row(row)
 
     async def update_feedback(

@@ -75,9 +75,9 @@ async def drain_durable_tasks(container: AppContainer) -> DrainStats:
         published = await publisher.publish_batch()
         stats.quarantined += published.quarantined
         if published.quarantined > 0:
-            stats.details.append(
-                f"outbox_quarantined:{published.quarantined}"
-            )
+            # 事件隔离属于环境失败：不得假装排空成功后继续评分。
+            stats.details.append(f"outbox_quarantined:{published.quarantined}")
+            raise EvalBarrierError(_message(stats))
         # 逐条消费本轮新增任务；瞬时失败（重试请求）立即重投队尾。
         while consumed < len(queue.tasks):
             task = queue.tasks[consumed]
@@ -92,9 +92,11 @@ async def drain_durable_tasks(container: AppContainer) -> DrainStats:
                     raise EvalBarrierError(_message(stats))
                 queue.tasks.append(task)  # 延迟重投在进程内退化为立即重投
                 continue
-            if result.status == "dead_lettered":
+            # 死信 / 已死信：投影未完成，必须 ERROR，不能继续 grader。
+            if result.status in {"dead_lettered", "already_dead_lettered"}:
                 stats.dead_lettered += 1
-                stats.details.append(f"task_dead_lettered:{task.task_name}")
+                stats.details.append(f"task_{result.status}:{task.task_name}")
+                raise EvalBarrierError(_message(stats))
         if published.claimed == 0 and consumed >= len(queue.tasks):
             return stats  # 本轮无新认领且队列已排干：一致性屏障达成
     stats.details.append("drain_rounds_exceeded")

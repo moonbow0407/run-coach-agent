@@ -50,8 +50,14 @@ export function useChat(
     if (!enabled) return;
     const existing = loadThreadId();
     setThreadId(existing);
+    // 尚无会话：不要请求 /threads//messages（会 422），保持干净空态。
+    if (!existing) {
+      setMessages([]);
+      setHistoryError(null);
+      return;
+    }
     apiGet<{ thread_id: string; messages: ThreadMessage[] }>(
-      `/api/v1/threads/${existing ?? ""}/messages`,
+      `/api/v1/threads/${existing}/messages`,
     )
       .then((data) => {
         setMessages(data.messages);
@@ -60,13 +66,17 @@ export function useChat(
       })
       .catch((error: unknown) => {
         if (error instanceof ApiError && error.status === 404) {
-          // 还没有会话线程：正常空状态，首条消息发出后由后端创建。
+          // 本地存的 thread 已失效：清空后由首条消息重新创建。
           setMessages([]);
+          return;
+        }
+        if (error instanceof UnauthorizedError) {
+          onUnauthorized();
           return;
         }
         setHistoryError(error instanceof Error ? error.message : "无法读取对话历史");
       });
-  }, [enabled]);
+  }, [enabled, onUnauthorized]);
 
   const cancel = useCallback(() => {
     if (abortControllerRef.current) {
@@ -149,6 +159,7 @@ export function useChat(
       try {
         await streamChat(content, threadId, handle, controller.signal);
         // 流正常结束且已提交：重取历史，把本地乐观消息换成落库消息。
+        // 先落库消息，再清空 live run，避免 finally 抢先擦掉正文造成闪烁。
         const current = loadThreadId();
         if (current) {
           const data = await apiGet<{ thread_id: string; messages: ThreadMessage[] }>(
@@ -156,6 +167,7 @@ export function useChat(
           );
           setMessages(data.messages);
         }
+        setRun((prev) => (prev.phase === "failed" ? prev : IDLE_RUN));
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
           setRun((prev) => ({
@@ -176,7 +188,6 @@ export function useChat(
         }));
       } finally {
         abortControllerRef.current = null;
-        setRun((prev) => (prev.phase === "failed" ? prev : IDLE_RUN));
       }
     },
     [run.phase, threadId, onUnauthorized],

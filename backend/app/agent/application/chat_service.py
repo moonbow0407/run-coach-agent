@@ -14,6 +14,7 @@ AgentRuntime 只负责推理循环，二者职责严格分离。
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -33,6 +34,8 @@ from app.common.errors import RunCoachError
 from app.common.errors import TurnCancelled as TurnCancelledError
 from app.common.events import EventMetadata
 from app.identity.application.request_context import RequestContext
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -133,11 +136,25 @@ class ChatService:
             raise
         except Exception as exc:
             # 统一失败语义：Turn / AgentRun 置为 failed，发布 TurnFailed。
+            # SSE 与同步 API 共用该事件：对客户端只暴露安全文案，原始异常仅入日志。
             await self._store.fail_turn(
                 user_id=request_context.user_id,
                 turn_id=started.turn.id,
                 event_metadata=_event_metadata(request_context),
             )
+            client_error = str(exc) if isinstance(exc, RunCoachError) else "Agent 执行失败"
+            if not isinstance(exc, RunCoachError):
+                logger.error(
+                    "chat.turn_failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                    extra={
+                        "request_id": str(request_context.request_id),
+                        "trace_id": str(request_context.trace_id),
+                        "user_id": str(request_context.user_id),
+                        "turn_id": str(started.turn.id),
+                        "run_id": str(started.run.id),
+                    },
+                )
             await self._lifecycle.publish_after_commit(
                 TurnFailed(
                     request_id=request_context.request_id,
@@ -146,7 +163,7 @@ class ChatService:
                     thread_id=started.thread.id,
                     user_id=request_context.user_id,
                     run_id=started.run.id,
-                    error=str(exc),
+                    error=client_error,
                 )
             )
             # 应用内已知错误原样上抛；其它异常（含基础设施细节）归一化为

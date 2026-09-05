@@ -178,11 +178,15 @@ function SessionDetailModal({
                   {formatPrescription(change ? change.new_prescription : prescription) || "自由安排"}
                 </span>
               </div>
-              {prescription["notes"] ? (
-                <div className="pt-1 text-xs text-mist">
-                  说明：{String(prescription["notes"])}
-                </div>
-              ) : null}
+              {(() => {
+                const notesSource = change ? change.new_prescription : prescription;
+                const notes = notesSource?.["notes"];
+                return notes ? (
+                  <div className="pt-1 text-xs text-mist">
+                    说明：{String(notes)}
+                  </div>
+                ) : null;
+              })()}
             </div>
           </div>
 

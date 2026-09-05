@@ -29,7 +29,7 @@ from app.coaching.application.plan_service import PlanQueryService
 from app.coaching.application.workout_command_service import WorkoutFeedbackCommandService
 from app.coaching.application.workout_service import WorkoutQueryService
 from app.coaching.ports.workout_mutation_store import WorkoutFeedbackMutation
-from app.common.errors import NotFoundError, RunCoachError
+from app.common.errors import ConflictError, NotFoundError, RunCoachError
 from app.common.events import EventMetadata
 from app.identity.application.request_context import RequestContext
 
@@ -228,12 +228,26 @@ async def submit_workout_feedback(
         )
         service = _workout_feedback_command(request)
         if existing is None:
-            feedback = await service.record(
-                user_id=request_context.user_id,
-                workout_id=workout_id,
-                mutation=mutation,
-                event_metadata=event_metadata,
-            )
+            try:
+                feedback = await service.record(
+                    user_id=request_context.user_id,
+                    workout_id=workout_id,
+                    mutation=mutation,
+                    event_metadata=event_metadata,
+                )
+            except ConflictError:
+                # 并发首次提交撞上唯一约束：改走更新已存在行。
+                raced = await _workouts(request).get_feedback(
+                    user_id=request_context.user_id, workout_id=workout_id
+                )
+                if raced is None:
+                    raise
+                feedback = await service.update(
+                    user_id=request_context.user_id,
+                    feedback_id=raced.id,
+                    mutation=mutation,
+                    event_metadata=event_metadata,
+                )
         else:
             feedback = await service.update(
                 user_id=request_context.user_id,

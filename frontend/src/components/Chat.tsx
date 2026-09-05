@@ -40,7 +40,7 @@ function CoachRun({ run }: { run: LiveRun }) {
             <span className="text-track">▸</span> {toolLabel(trace.tool)}
             {trace.done ? (
               <span className="ml-1.5">
-                · {trace.status === "ok" ? "" : `${trace.status} · `}
+                · {trace.status === "success" || trace.status === "ok" ? "" : `${trace.status} · `}
                 {trace.durationMs !== null ? `${trace.durationMs}ms` : ""}
               </span>
             ) : (

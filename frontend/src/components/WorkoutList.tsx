@@ -173,9 +173,12 @@ function WorkoutRow({
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const fetchFeedback = async () => {
     setError(null);
+    setLoading(true);
     try {
       setFeedback(
         await apiGet<WorkoutFeedback>(`/api/v1/workouts/${workout.id}/feedback`),
@@ -186,13 +189,16 @@ function WorkoutRow({
       } else {
         setError(err instanceof Error ? err.message : "无法读取反馈");
       }
+    } finally {
+      setLoading(false);
+      setLoaded(true);
     }
   };
 
   const toggle = async () => {
     const next = !open;
     setOpen(next);
-    if (next && feedback === null) {
+    if (next && !loaded && !loading) {
       await fetchFeedback();
     }
   };
@@ -239,7 +245,9 @@ function WorkoutRow({
                 重试加载
               </button>
             </div>
-          ) : editing || (feedback === null && !error) ? (
+          ) : loading || !loaded ? (
+            <p className="px-1 py-2 font-mono text-xs text-mist">加载主观反馈…</p>
+          ) : editing || feedback === null ? (
             <FeedbackForm
               workoutId={workout.id}
               initialFeedback={feedback}

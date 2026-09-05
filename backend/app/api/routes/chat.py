@@ -31,6 +31,7 @@ from app.api.schemas.chat import (
     ThreadMessagesResponse,
 )
 from app.api.sse import format_sse, map_lifecycle_event
+from app.common.ids import new_id
 from app.common.errors import (
     AuthenticationError,
     ForbiddenError,
@@ -101,13 +102,27 @@ async def chat_stream(
     事件的生产方是后台任务、消费方是本生成器，两者节奏不同：listener 是同步回调，
     由 ChatService 在执行链里调用；SSE 帧只能在异步生成器里 yield。用 asyncio.Queue
     把“随时可能到达的事件”缓冲起来，才能既不被阻塞又能保证事件按序完整推送。
+
+    聊天流的 request_id 一律服务端签发，忽略客户端 X-Request-Id，防止凭猜测
+    的 request_id 串台订阅别人的生命周期事件。
     """
+    # 覆盖入口依赖可能采纳的客户端 request_id：流隔离键只信任服务端生成值。
+    request_context = RequestContext(
+        user_id=request_context.user_id,
+        request_id=new_id(),
+        trace_id=request_context.trace_id,
+        timestamp=request_context.timestamp,
+    )
     queue: asyncio.Queue[LifecycleEvent] = asyncio.Queue()
 
     def listener(event: LifecycleEvent) -> None:
-        # 只接收属于当前 HTTP 请求的事件（按 request_id 过滤），避免不同请求串台。
-        if event.request_id == request_context.request_id:
-            queue.put_nowait(event)
+        # 先按服务端 request_id 隔离；若事件带 user_id，再校验归属，双保险。
+        if event.request_id != request_context.request_id:
+            return
+        event_user_id = getattr(event, "user_id", None)
+        if event_user_id is not None and event_user_id != request_context.user_id:
+            return
+        queue.put_nowait(event)
 
     dispatcher = _dispatcher(request)
     dispatcher.subscribe(listener)
@@ -217,7 +232,15 @@ async def chat_stream(
             await asyncio.gather(task, return_exceptions=True)
 
     # media_type=text/event-stream 即 SSE（Server-Sent Events，服务器单向推送）响应。
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get("/api/v1/threads/{thread_id}/messages", response_model=ThreadMessagesResponse)
