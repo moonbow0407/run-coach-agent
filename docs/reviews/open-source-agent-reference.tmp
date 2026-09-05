@@ -1,0 +1,118 @@
+# 开源 Agent 参考设计：Pi Harness 与 Mem0
+
+> 调研日期：2026-09-02  
+> 范围：只采用项目官方文档与官方源码；重点讨论可迁移到 Run Coach 的设计原则，而不是罗列框架功能。
+
+## 1. 结论先行
+
+Run Coach 当前最有价值的部分并不是“像不像某个通用 Agent 框架”，而是它已经把 **Canonical Fact、Derived Domain State、Long-term Memory 与 Runtime Working State** 分开，并且用正式领域能力约束有副作用的动作。这比直接套用 Pi 或 Mem0 更适合长期跑步教练。
+
+对标之后，最值得补的两处是：
+
+1. 从 Pi 借鉴 **按 token 预算构造模型上下文、可审计压缩、运行中 steering/follow-up**；当前项目只有历史消息条数上限，没有完整的 token/context-window 治理。
+2. 从 Mem0 借鉴 **面向用户的记忆纠错/历史查看能力与混合召回实验**；不要照搬它的通用事实 prompt、LLM 决定 ADD/UPDATE/DELETE，或为了“先进”过早引入知识图谱。
+
+## 2. Pi：优秀 harness 的核心不是“大而全”，而是分层和控制面
+
+### 2.1 先确认研究对象
+
+用户所说的 Pi 是原 `badlogic/pi-mono`。截至调研日，该官方 GitHub 地址会重定向到 `earendil-works/pi`；仓库 README 自称 “Pi Agent Harness”，并将项目拆为 coding agent、agent core、统一多供应商 LLM API、TUI、telemetry 等包。[官方仓库 README](https://github.com/earendil-works/pi/blob/main/README.md)
+
+这一区分很重要：应该拿 Run Coach 的 `agent/runtime + reasoning + tools` 对照 Pi 的 **agent core/harness**，而不是拿整个垂直产品对照 Pi CLI。
+
+### 2.2 值得学习的原则
+
+| 原则 | Pi 的官方实现事实 | 对 Run Coach 的意义 |
+|---|---|---|
+| 最小核心与产品壳分离 | Pi 把 provider-neutral agent runtime 放在 `packages/agent`，交互式 coding agent 放在 `packages/coding-agent`，多模型协议放在 `packages/ai`。[包边界](https://github.com/earendil-works/pi/blob/main/README.md) | Runtime 不应拥有跑步领域事实；这一点 Run Coach 已做对。|
+| 循环是显式状态机 | agent loop 围绕 model stream、tool call、tool result、下一轮模型调用推进，并通过事件暴露开始、增量、结束与错误状态。[agent loop 源码](https://github.com/earendil-works/pi/blob/main/packages/agent/src/agent-loop.ts) | 保持 `Context → Reason → Action → Observation → Final` 的显式循环，比把流程藏进 graph DSL 更易审计。|
+| 模型上下文是投影，不是存储本体 | Agent core 提供 `transformContext` 与 `convertToLlm` 边界，让应用消息先经过上下文变换，再转换为供应商可理解的 LLM 消息。[Agent core 文档](https://github.com/earendil-works/pi/blob/main/packages/agent/README.md) | `ContextBundle` 应继续是只读投影；后续压缩也不应回写 canonical conversation。|
+| steering 与 follow-up 是不同控制语义 | Pi 的 agent loop 支持在运行过程中读取 steering 消息，并在 agent 原本结束后处理 follow-up 消息；它们不是普通历史消息的同义词。[Agent core 文档](https://github.com/earendil-works/pi/blob/main/packages/agent/README.md) | 长工具执行时，用户“先停下/改查这个”和“做完后再……”需要不同队列与可追踪语义。|
+| 扩展的是控制面钩子 | Pi coding agent 的 extension API 可监听 session、agent、tool、context 等事件，并能注册 tool/command/UI；官方文档同时明确扩展运行在进程内，具有与 Pi 相同权限。[扩展文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md) | Run Coach 可扩展生命周期观察者，但涉及领域写入仍必须经过 Application Service，不能允许插件绕过领域边界。|
+| 压缩是显式、可替换策略 | Pi 在接近 context window 时压缩旧对话，保留近期消息；压缩结果作为 session 中的条目保存，扩展可以介入或替换策略。[压缩文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/compaction.md) | 应补“token 预算 + 压缩 provenance + 可回放原文”，而不是只增加 `history_limit`。|
+| Provider 差异被限制在适配层 | Pi 单独维护统一多 provider LLM API，并为 coding agent 提供 custom provider 注册与模型能力声明。[根包设计](https://github.com/earendil-works/pi/blob/main/README.md)；[自定义 Provider 文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/custom-provider.md) | Run Coach 已有 provider-neutral request/response；应在真有第二供应商需求时补 capability contract，而非提前堆适配器。|
+| Harness 本身不等于安全沙箱 | Pi 官方明确默认以启动进程的用户权限运行，不内建文件、进程、网络或凭证权限系统，强隔离应依赖容器或 sandbox。[权限说明](https://github.com/earendil-works/pi/blob/main/README.md) | 不要把“工具注册成功”误当授权；Run Coach 的可信 `ToolExecutionContext` 与领域命令边界应保留。|
+
+### 2.3 与当前 Run Coach 的逐项对照
+
+已经对齐且设计质量较高：
+
+- [`agent_runtime.py`](../../backend/app/agent/runtime/agent_runtime.py) 只编排 Context、Reasoner、ToolRuntime、Lifecycle 和 Trace，不接触 Registry/ORM；这与 Pi 的最小 agent core 思路一致。
+- [`state.py`](../../backend/app/agent/reasoning/state.py) 将 run-local tool call/result 与 committed conversation 分离，还强制 `model_call_id` 配对；比把所有内容都塞入 chat history 更可靠。
+- [`assembler.py`](../../backend/app/agent/context/assembler.py) 将 Working Context、Conversation、Memory 分成 provider；[`resolver.py`](../../backend/app/tools/resolver/resolver.py) 每步重算 visible tools。这已经具备清晰的模型输入控制面。
+- Lifecycle event、RunStep trace、canonical conversation 各自承担实时通知、审计、用户历史三种语义，没有混成同一份“消息日志”。
+
+明显差距：
+
+- **没有 context-window/模型 token 预算与压缩协议。** `history_limit` 是消息条数，不足以处理一条超长消息、tool observation 膨胀或不同模型窗口差异。优先级最高。
+- **只有取消，没有 steering/follow-up。** 当前 SSE 可观察执行且断连会取消 task，但用户不能在同一个 run 内改变接下来的调查方向。
+- **Provider 只是接口中立，能力契约尚薄。** 当前仅 OpenAI-compatible adapter；模型是否支持并行 tool calls、context window、structured output 等还没有独立 capability 描述。
+- **Lifecycle 是内部事件总线，不是受治理的 extension API。** 这目前不是缺陷；只有出现第三方集成需求后，才值得增加权限、超时、错误隔离和版本化事件契约。
+
+## 3. Mem0：可借鉴的是记忆操作管线，不是把 Memory 当万能数据库
+
+### 3.1 官方实现的关键事实
+
+Mem0 的开源实现把记忆写入拆成两次模型判断：先从对话提取候选 facts，再把候选与向量检索到的既有 memories 交给 memory manager，输出 `ADD / UPDATE / DELETE / NONE` 操作。[事实提取与更新 prompt](https://github.com/mem0ai/mem0/blob/main/mem0/configs/prompts.py)；[Memory 实现](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py)
+
+这套管线解决的是通用个人化记忆的几个现实问题：
+
+- 写入前先提取，避免把整段对话原样当 memory；官方 prompt 还区分 user memory 与 agent memory 的提取来源。[官方 prompts](https://github.com/mem0ai/mem0/blob/main/mem0/configs/prompts.py)
+- 用 `user_id / agent_id / run_id` 等 metadata 限定记忆空间，并要求读取或批量删除时提供过滤范围，避免全局记忆混用。[Memory 源码](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py)
+- 写入向量存储的同时维护 ADD/UPDATE/DELETE history；更新会保留原创建时间并刷新 embedding 与更新时间。[Memory 源码](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py)
+- 当前源码为 memory 文本生成向量，同时保存用于 BM25 的词形归一化文本，说明其检索设计已经不局限于裸向量相似度。[Memory 源码](https://github.com/mem0ai/mem0/blob/main/mem0/memory/main.py)
+- Graph Memory 是可选能力，用实体与关系增强多跳关联查询，而不是所有记忆的唯一存储形态。[官方 Graph Memory 文档](https://docs.mem0.ai/open-source/features/graph-memory)
+
+### 3.2 Run Coach 已经比通用 Mem0 更严格的地方
+
+Run Coach 不应“替换成 Mem0”。当前架构在垂直领域正确性上更强：
+
+- [`ARCHITECTURE.md`](../ARCHITECTURE.md) 明确 Workout/Feedback/Goal/Plan 是 canonical facts，Athlete State 是 derived state，Memory 只表达长期认知；通用 Mem0 的 fact 字符串不能替代这些对象。
+- [`semantic.py`](../../backend/app/memory/domain/semantic.py) 强制每条候选带 Evidence，区分 explicit/inferred，并用 candidate/active/superseded/expired 生命周期保存历史语义；这比直接覆盖或删除冲突文本更适合解释“当时为何这样建议”。
+- [`semantic_projection_service.py`](../../backend/app/memory/application/semantic_projection_service.py) 只从 committed turn 投影明示记忆，推断记忆必须来自校验后的 evidence set；外部模型调用与短事务分离，还用 fingerprint 支持幂等重放。
+- [`retrieval_service.py`](../../backend/app/memory/application/retrieval_service.py) 在用户隔离与双时间过滤后，按相似度、置信度/重要度、新近度和 explicit boost 确定性重排，并执行硬字符预算；它不是“top-k 向量结果直接塞 prompt”。
+- Episode 能关联 Workout、Feedback、State、PlanChange 等领域证据；这已经是一张有业务语义的 evidence graph，不能因为 Mem0 支持 Graph Memory 就再造一套平行事实图。
+
+### 3.3 应该借鉴与不应该照搬
+
+应该借鉴：
+
+1. **Memory inspection/correction API。** 增加“查看某条记忆的证据、状态变化、被谁取代”和“用户纠正/确认”的正式 Application Service 与 UI。底层已有 provenance，产品层尚未充分利用。
+2. **显式 mutation result。** 投影输出统一返回 `created / reinforced / superseded / ignored` 之类的领域事件，方便 worker 指标、回放与评估；名称应服从本项目生命周期，而不是照搬 ADD/UPDATE/DELETE。
+3. **混合召回实验。** 在 pgvector 候选之外试验 PostgreSQL full-text/BM25 风格的关键词召回，再进入现有确定性 reranker；先用 eval 证明对训练术语、赛事名、日期约束有效，再进入生产。
+4. **用户可控的作用域与删除语义。** 当前有 `user_id` 隔离，但应进一步明确用户导出、纠正、失效、删除的产品接口与审计语义。
+
+不应该照搬：
+
+- 不让通用 LLM prompt 单独决定领域记忆的删除或覆盖；继续由 `subject_key + assertion_hash + source_occurred_at + Evidence` 和领域规则控制冲突。
+- 不把 assistant 建议抽成“关于用户的事实”；当前 extractor 仅把 assistant message 当 context 的限制是正确的。
+- 不为追求多跳检索立即引入独立图数据库。先列出实际失败查询并做 eval；多数训练决策应从 Coaching Domain 的结构化查询获得。
+- 不把原始 Workout/Plan/State 复制进向量库成为另一套 source of truth。
+
+## 4. 建议的实施顺序
+
+### P0：先补模型上下文治理
+
+新增 provider-neutral `ModelCapabilities`（至少包括 context window、tool calling/structured output 能力）和 `ContextBudgetPolicy`。预算应分别统计 system、working context、recent conversation、memory、tool schema、run-local observations；超过预算时生成可追溯 compaction entry，但 canonical messages 与完整 RunStep 不删除。
+
+验收重点不是“能总结”，而是：压缩前后关键训练约束不丢失、tool call/result 配对不破坏、同一输入策略结果确定、原始证据可回放。
+
+### P1：把 Memory 的可解释性做成产品能力
+
+提供只读接口查看 active/superseded/expired memory、evidence 与 projector version，再提供用户纠正命令。纠正应形成新的 explicit evidence 和 supersession，而不是直接 `UPDATE memory.content`。
+
+### P1：建立检索与 Agent 行为 eval
+
+先建立小型黄金集：偏好命中、过期约束排除、冲突记忆以当前输入优先、相似 episode 命中、训练事实不得从 memory 幻觉补全。然后比较 vector-only 与 hybrid recall；没有指标收益就不引入复杂索引。
+
+### P2：只在长任务出现后加入 steering/follow-up
+
+定义独立的 run input queue：steering 在安全检查点进入当前 run，follow-up 在 Final 后开启新 turn。两者都必须持久记录用户真实输入，但不能伪装成 tool observation 或覆盖已经 committed 的消息。
+
+### P3：最后才考虑开放扩展面
+
+若将来需要设备导入、外部训练平台或第三方工具包，优先开放版本化 ToolProvider 与只读 lifecycle subscriber；领域写操作仍通过 Coaching Application Service，第三方代码需要超时、错误隔离、权限声明和审计。
+
+## 5. 一个简短判断
+
+Pi 最值得学的是 **harness 的可控运行面**；Mem0 最值得学的是 **记忆写入与变更的显式管线**。Run Coach 不应变成 Pi 的 Python 复刻，也不应把 Memory 外包给 Mem0。更好的路线是保留现在已经正确的领域与证据边界，再补 token 级上下文治理、记忆纠错产品面和可量化 eval。
