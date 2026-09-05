@@ -9,6 +9,7 @@ from arq import Retry, cron
 from arq.connections import RedisSettings
 
 from app.bootstrap import AppContainer, build_container
+from app.common.lab_clock import LabClock
 from app.infrastructure.config import Settings
 from app.infrastructure.outbox.repository import (
     SqlAlchemyConsumptionRepository,
@@ -46,6 +47,9 @@ async def startup(ctx: dict) -> None:
         memory_projector_version=settings.memory_projector_version,
     )
     ctx["app_container"] = container  # 供 shutdown 钩子释放资源
+    # lab 开启时 worker 与 API 共享 Redis 虚拟时钟：启动即拉取，Redis 不可达直接失败。
+    if isinstance(container.clock, LabClock):
+        await container.clock.start()
     # 幂等消费者：真正执行任务并管理重试 / 死信。
     ctx["consumer_runner"] = ConsumerRunner(
         receipts=receipts,
@@ -69,9 +73,11 @@ async def startup(ctx: dict) -> None:
 
 
 async def shutdown(ctx: dict) -> None:
-    """Worker 退出钩子：释放数据库连接池等进程级资源。"""
+    """Worker 退出钩子：停止 lab 时钟、释放数据库连接池等进程级资源。"""
     container: AppContainer | None = ctx.get("app_container")
     if container is not None:
+        if isinstance(container.clock, LabClock):
+            await container.clock.stop()
         await container.engine.dispose()
 
 

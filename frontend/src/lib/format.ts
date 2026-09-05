@@ -65,12 +65,13 @@ export function formatDateTime(iso: string): string {
   return `${date.getMonth() + 1}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
-/** 距比赛日天数（按本地日历日差，比赛日当天为 0）。 */
-export function daysUntil(dateStr: string): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+/** 距比赛日天数（按本地日历日差，比赛日当天为 0）；today 传 YYYY-MM-DD 时以它为基准。 */
+export function daysUntil(dateStr: string, today?: string): number {
+  // Scenario Lab 下传入虚拟"业务今天"，使倒计时与 Agent 视角一致；默认本地今天。
+  const base = today ? parseDate(today) : new Date();
+  base.setHours(0, 0, 0, 0);
   const target = parseDate(dateStr);
-  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+  return Math.round((target.getTime() - base.getTime()) / 86_400_000);
 }
 
 /** 课型的单字 / 短缩写：课表条上的 mono 标注。 */

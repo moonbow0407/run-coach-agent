@@ -31,13 +31,13 @@ from app.api.schemas.chat import (
     ThreadMessagesResponse,
 )
 from app.api.sse import format_sse, map_lifecycle_event
-from app.common.ids import new_id
 from app.common.errors import (
     AuthenticationError,
     ForbiddenError,
     NotFoundError,
     RunCoachError,
 )
+from app.common.ids import new_id
 from app.identity.application.request_context import RequestContext
 
 router = APIRouter()

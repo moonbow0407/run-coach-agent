@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     agent_max_steps: int = 16  # 单次 Run 的最大推理步数上限
     conversation_history_limit: int = 20  # 组装 Prompt 时携带的历史消息条数上限
 
+    # Scenario Lab：演示/联调用可推进业务时钟与假数据，仅本地开启；
+    # 生产必须保持 False——开启后 API 与 worker 共享 Redis 里的虚拟"现在"。
+    enable_scenario_lab: bool = False
+
     model_config = SettingsConfigDict(  # pydantic-settings 配置：从 .env 读入并忽略未声明变量
         env_file=(".env", "../.env"),
         env_file_encoding="utf-8",

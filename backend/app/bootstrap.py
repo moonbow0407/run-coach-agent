@@ -37,6 +37,7 @@ from app.agent.reasoning.reasoner import Reasoner
 from app.agent.runtime.agent_runtime import AgentRuntime
 from app.api.routes.chat import router as chat_router
 from app.api.routes.coaching import router as coaching_router
+from app.api.routes.dev import router as dev_router
 from app.api.routes.health import router as health_router
 from app.api.routes.plan_changes import router as plan_changes_router
 from app.coaching.application.athlete_recompute_service import AthleteStateRecomputeService
@@ -53,6 +54,7 @@ from app.coaching.application.workout_command_service import (
 from app.coaching.application.workout_service import WorkoutQueryService
 from app.common.clock import Clock, SystemClock
 from app.common.errors import InfrastructureError, ReasonerError
+from app.common.lab_clock import LabClock
 from app.infrastructure.config import Settings
 from app.infrastructure.database.repositories.athlete_recompute import (
     SqlAlchemyAthleteStateRecomputeUnitOfWork,
@@ -95,6 +97,7 @@ from app.infrastructure.memory.extraction import (
     UnavailableSemanticMemoryExtractor,
 )
 from app.infrastructure.outbox.writer import OutboxWriter
+from app.infrastructure.redis_clock_store import RedisVirtualClockStore
 from app.memory.application.episode_projection_service import EpisodeProjectionService
 from app.memory.application.lifecycle_service import MemoryLifecycleService
 from app.memory.application.retrieval_service import MemoryRetrievalService
@@ -144,6 +147,13 @@ class AppContainer:
     memory_lifecycle_service: MemoryLifecycleService  # 记忆生命周期（过期/取代）
 
 
+def _default_clock(settings: Settings) -> Clock:
+    """按配置选择时钟：lab 开启时用可推进的 LabClock（Redis 共享"业务现在"）。"""
+    if settings.enable_scenario_lab:
+        return LabClock(RedisVirtualClockStore(settings.redis_url))
+    return SystemClock()
+
+
 def build_container(
     settings: Settings,
     *,
@@ -155,7 +165,7 @@ def build_container(
     episode_detector: EpisodeDetector | None = None,
 ) -> AppContainer:
     """按依赖方向把全部实现装配成 AppContainer；参数可注入测试替身。"""
-    clock = clock or SystemClock()
+    clock = clock or _default_clock(settings)
     engine = create_engine(settings.database_url, poolclass=poolclass)
     sessions = create_session_factory(engine)
     lifecycle = LifecycleDispatcher()
@@ -370,8 +380,16 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # 应用关闭时释放数据库连接池
+        # Lab 时钟在启动期拉取一次共享值：Redis 不可达立即失败，不带病运行。
+        lab_clock = (
+            app.state.clock if isinstance(app.state.clock, LabClock) else None
+        )
+        if lab_clock is not None:
+            await lab_clock.start()
         yield
+        if lab_clock is not None:
+            await lab_clock.stop()
+        # 应用关闭时释放数据库连接池
         await app.state.engine.dispose()
 
     app = FastAPI(title="Run Coach Agent", version="0.1.0", lifespan=lifespan)
@@ -404,4 +422,7 @@ def create_app(
     app.include_router(chat_router)
     app.include_router(plan_changes_router)
     app.include_router(coaching_router)
+    if container.settings.enable_scenario_lab:
+        # Scenario Lab 只在显式开启时暴露：生产构建不注册任何 /dev 路由。
+        app.include_router(dev_router)
     return app

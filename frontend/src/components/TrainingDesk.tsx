@@ -9,11 +9,14 @@ import { useState } from "react";
 
 import { Chat } from "@/components/Chat";
 import { DashboardHeader } from "@/components/DashboardHeader";
+import { ScenarioBar } from "@/components/ScenarioBar";
 import { WeekPlan } from "@/components/WeekPlan";
 import { WorkoutList } from "@/components/WorkoutList";
 import { ErrorNote } from "@/components/ui";
 import { useChat } from "@/hooks/useChat";
+import { useDevClock } from "@/hooks/useDevClock";
 import { useTrainingData } from "@/hooks/useTrainingData";
+import { virtualTodayISO } from "@/lib/devClock";
 import { tokenUserId } from "@/lib/token";
 
 type View = "chat" | "desk";
@@ -30,6 +33,11 @@ export function TrainingDesk({
 
   const chat = useChat(true, () => void data.reloadAfterRun(), onUnauthorized);
 
+  // Scenario Lab：后端未开启时面板自动隐藏；任何 lab 变更后整体重取训练台数据。
+  const devClock = useDevClock(() => void data.reload());
+  // 业务今天：lab 下取虚拟时钟（上海日历日），未开启时 undefined 走前端本地今天。
+  const today = devClock.clock ? virtualTodayISO(devClock.clock.virtual_now) : undefined;
+
   const userId = tokenUserId(token);
   const userIdShort = userId ? `${userId.slice(0, 8)}` : "";
 
@@ -40,6 +48,7 @@ export function TrainingDesk({
         pendingChange={data.pendingChange}
         onDecided={data.reloadAfterDecision}
         onRefresh={data.reload}
+        today={today}
       />
       <WorkoutList
         workouts={data.workouts?.workouts ?? null}
@@ -66,7 +75,12 @@ export function TrainingDesk({
         </div>
       </div>
 
-      <DashboardHeader goal={data.goal} state={data.state} />
+      <ScenarioBar
+        controller={devClock}
+        latestWorkoutId={data.workouts?.workouts?.[0]?.id ?? null}
+      />
+
+      <DashboardHeader goal={data.goal} state={data.state} today={today} />
 
       {data.error ? (
         <div className="mx-auto mt-4 w-full max-w-6xl px-5">

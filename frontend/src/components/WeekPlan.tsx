@@ -30,9 +30,14 @@ interface DayCell {
   weekday: string;
   session: PlannedSession | null;
   change: PlanChange["payload"]["changes"][number] | null;
+  isToday: boolean; // 该格是否为业务"今天"
 }
 
-function buildWeek(plan: ActivePlan, pendingChange: PlanChange | null): DayCell[] {
+function buildWeek(
+  plan: ActivePlan,
+  pendingChange: PlanChange | null,
+  today?: string,
+): DayCell[] {
   const start = parseDate(plan.window_start);
   const sessionsByDate = new Map<string, PlannedSession>();
   for (const session of plan.sessions) {
@@ -56,6 +61,8 @@ function buildWeek(plan: ActivePlan, pendingChange: PlanChange | null): DayCell[
       date,
       weekday: WEEKDAY_LABELS[day.getDay() === 0 ? 6 : day.getDay() - 1] ?? "",
       session,
+      // 「今天」以业务时钟为准（lab 下为虚拟今天），未传则不标记。
+      isToday: today !== undefined && date === today,
       change: session ? (changeBySessionId.get(session.id) ?? null) : null,
     };
   });
@@ -233,11 +240,13 @@ export const WeekPlan = memo(function WeekPlan({
   pendingChange,
   onDecided,
   onRefresh,
+  today,
 }: {
   plan: ActivePlan | null;
   pendingChange: PlanChange | null;
   onDecided: () => Promise<void>;
   onRefresh: () => void;
+  today?: string; // 业务今天（YYYY-MM-DD）；lab 开启时来自虚拟时钟
 }) {
   const [busy, setBusy] = useState(false);
   const [selectedCell, setSelectedCell] = useState<DayCell | null>(null);
@@ -259,7 +268,7 @@ export const WeekPlan = memo(function WeekPlan({
 
   const pendingDecision =
     pendingChange?.status === "pending_confirmation" ? pendingChange : null;
-  const week = buildWeek(plan, pendingDecision);
+  const week = buildWeek(plan, pendingDecision, today);
   const decisions = pendingDecision?.payload.changes ?? [];
   const isPreparing = pendingChange?.status === "draft";
 
@@ -304,6 +313,11 @@ export const WeekPlan = memo(function WeekPlan({
             <span className="font-mono text-[10px] uppercase tracking-wider text-mist">
               {cell.weekday}
             </span>
+            {cell.isToday ? (
+              <span className="rounded bg-track px-1 py-px font-mono text-[9px] font-semibold uppercase tracking-wider text-paper">
+                今天
+              </span>
+            ) : null}
             <LoadBar cell={cell} index={index} />
             <DayLabel cell={cell} />
             <span className="font-mono text-[10px] text-mist">

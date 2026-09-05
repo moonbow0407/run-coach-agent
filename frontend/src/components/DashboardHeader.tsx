@@ -26,12 +26,14 @@ const RECOVERY_LABEL = { poor: "差", fair: "一般", good: "好" } as const;
 export const DashboardHeader = memo(function DashboardHeader({
   goal,
   state,
+  today,
 }: {
   goal: ActiveGoal | null;
   state: AthleteState | null;
+  today?: string; // 业务今天（YYYY-MM-DD）；lab 开启时来自虚拟时钟
 }) {
   const raceName = formatRaceDistance(goal?.race_distance_m ?? null);
-  const countdown = goal?.race_date ? daysUntil(goal.race_date) : null;
+  const countdown = goal?.race_date ? daysUntil(goal.race_date, today) : null;
 
   return (
     <header className="border-b border-hairline">
