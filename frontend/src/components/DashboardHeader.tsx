@@ -6,6 +6,8 @@
  * 「系统认为你现在怎么样」必须可解释、可追溯，这是本产品的立场。
  */
 
+import { memo } from "react";
+
 import { Eyebrow, Metric } from "@/components/ui";
 import {
   daysUntil,
@@ -20,7 +22,8 @@ import type { ActiveGoal, AthleteState } from "@/lib/types";
 const FATIGUE_LABEL = { low: "低", moderate: "中", high: "高" } as const;
 const RECOVERY_LABEL = { poor: "差", fair: "一般", good: "好" } as const;
 
-export function DashboardHeader({
+// 对话流式期间父组件高频重渲染：goal / state 不变时跳过页头重绘。
+export const DashboardHeader = memo(function DashboardHeader({
   goal,
   state,
 }: {
@@ -97,4 +100,4 @@ export function DashboardHeader({
       </div>
     </header>
   );
-}
+});

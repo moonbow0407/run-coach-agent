@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiGet, UnauthorizedError } from "@/lib/api";
 import type { ThreadMessage } from "@/lib/types";
-import { loadThreadId, saveThreadId } from "@/lib/token";
+import { clearThreadId, loadThreadId, saveThreadId } from "@/lib/token";
 import { streamChat, type StreamEvent, type ToolTrace } from "@/lib/sse";
 
 export type RunPhase =
@@ -90,7 +90,7 @@ export function useChat(
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    window.localStorage.removeItem("run-coach.thread-id");
+    clearThreadId();
     setThreadId(null);
     setMessages([]);
     setRun(IDLE_RUN);
@@ -110,12 +110,29 @@ export function useChat(
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
+      // 流式正文快照与完成标记：与下方 setRun 同一累积规则维护，
+      // 供「流成功但历史重取失败」时把回复转正为本地消息兜底。
+      let streamedContent = "";
+      let streamedStep = -1;
+      let runCompleted = false;
+
       const handle = (event: StreamEvent) => {
+        if (event.type === "response.delta") {
+          streamedContent =
+            streamedStep === event.stepIndex
+              ? streamedContent + event.content
+              : event.content;
+          streamedStep = event.stepIndex;
+        }
+        if (event.type === "run.completed") runCompleted = true;
+        // 线程 id 落库是副作用，必须放在 updater 之外：updater 要保持纯函数。
+        if (event.type === "run.started") {
+          saveThreadId(event.threadId);
+          setThreadId(event.threadId);
+        }
         setRun((prev) => {
           switch (event.type) {
             case "run.started":
-              saveThreadId(event.threadId);
-              setThreadId(event.threadId);
               return { ...prev, phase: "reasoning" };
             case "reasoning.started":
               return { ...prev, phase: "reasoning" };
@@ -162,10 +179,25 @@ export function useChat(
         // 先落库消息，再清空 live run，避免 finally 抢先擦掉正文造成闪烁。
         const current = loadThreadId();
         if (current) {
-          const data = await apiGet<{ thread_id: string; messages: ThreadMessage[] }>(
-            `/api/v1/threads/${current}/messages`,
-          );
-          setMessages(data.messages);
+          try {
+            const data = await apiGet<{ thread_id: string; messages: ThreadMessage[] }>(
+              `/api/v1/threads/${current}/messages`,
+            );
+            setMessages(data.messages);
+          } catch {
+            // 重取失败不算整轮失败：回复已生成，把流式正文转正为本地消息兜底展示。
+            if (runCompleted && streamedContent) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: `local-${Date.now()}`,
+                  role: "assistant",
+                  content: streamedContent,
+                  created_at: new Date().toISOString(),
+                },
+              ]);
+            }
+          }
         }
         setRun((prev) => (prev.phase === "failed" ? prev : IDLE_RUN));
       } catch (error) {

@@ -17,6 +17,11 @@ export function clearToken(): void {
   window.localStorage.removeItem(THREAD_KEY);
 }
 
+/** 只清会话线程、保留令牌：开启新话题时用。 */
+export function clearThreadId(): void {
+  window.localStorage.removeItem(THREAD_KEY);
+}
+
 export function loadThreadId(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(THREAD_KEY);

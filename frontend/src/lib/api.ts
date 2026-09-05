@@ -50,7 +50,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // 响应不是 JSON 时保留状态码信息。
     }
-    if (response.status === 404) throw new ApiError(404, message);
     throw new ApiError(response.status, message);
   }
   return (await response.json()) as T;

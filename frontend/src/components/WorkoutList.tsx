@@ -6,14 +6,14 @@
  * 客观与主观两类数据在界面上保持清晰分离。
  */
 
-import { useState } from "react";
+import { memo, useState } from "react";
 
 import { ApiError, apiGet, apiPost } from "@/lib/api";
 import {
   SESSION_NAME,
-  formatDateTime,
   formatDistance,
   formatDuration,
+  formatShortDate,
 } from "@/lib/format";
 import type { Workout, WorkoutFeedback } from "@/lib/types";
 import { EmptyState, Eyebrow } from "@/components/ui";
@@ -218,7 +218,7 @@ function WorkoutRow({
         className="flex w-full items-center justify-between gap-3 px-1 py-2.5 text-left transition-colors hover:bg-fog"
       >
         <div className="flex min-w-0 items-baseline gap-3">
-          <span className="font-mono text-xs text-mist">{formatDateTime(workout.started_at).split(" ")[0]}</span>
+          <span className="font-mono text-xs text-mist">{formatShortDate(workout.started_at)}</span>
           <span className="truncate text-sm font-medium text-asphalt">
             {SESSION_NAME[workout.workout_type]}
           </span>
@@ -284,7 +284,8 @@ function WorkoutRow({
   );
 }
 
-export function WorkoutList({
+// 对话流式期间父组件高频重渲染：props 不变时跳过整块训练列表的重绘。
+export const WorkoutList = memo(function WorkoutList({
   workouts,
   onFeedbackSaved,
 }: {
@@ -319,4 +320,4 @@ export function WorkoutList({
       </div>
     </section>
   );
-}
+});

@@ -42,15 +42,27 @@ export function parseDate(dateStr: string): Date {
   return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1);
 }
 
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** Date → YYYY-MM-DD（本地时区），parseDate 的逆变换。 */
+export function formatDateISO(date: Date): string {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
 export function formatDayMonth(dateStr: string): string {
   const date = parseDate(dateStr);
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+/** ISO 时刻 → 「月-日」，只取日期部分（训练列表行用）。 */
+export function formatShortDate(iso: string): string {
+  const date = new Date(iso);
+  return `${date.getMonth() + 1}-${pad2(date.getDate())}`;
+}
+
 export function formatDateTime(iso: string): string {
   const date = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getMonth() + 1}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
 /** 距比赛日天数（按本地日历日差，比赛日当天为 0）。 */

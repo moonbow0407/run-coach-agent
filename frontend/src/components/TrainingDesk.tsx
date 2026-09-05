@@ -39,11 +39,11 @@ export function TrainingDesk({
         plan={data.plan}
         pendingChange={data.pendingChange}
         onDecided={data.reloadAfterDecision}
-        onRefresh={() => void data.reload()}
+        onRefresh={data.reload}
       />
       <WorkoutList
         workouts={data.workouts?.workouts ?? null}
-        onFeedbackSaved={() => void data.reloadAfterRun()}
+        onFeedbackSaved={data.reloadAfterRun}
       />
     </div>
   );

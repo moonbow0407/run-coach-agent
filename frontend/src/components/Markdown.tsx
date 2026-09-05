@@ -6,7 +6,7 @@
  * 针对教练建议中的段落、分点清单、加粗、引用与等宽数据块做贴合训练台设计语言的排版。
  */
 
-import React, { type ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 /** 行内标记解析：支持加粗 **text** 与行内代码 `code`。 */
 function parseInline(text: string): ReactNode[] {
@@ -47,7 +47,8 @@ function parseInline(text: string): ReactNode[] {
   return elements.length > 0 ? elements : [text];
 }
 
-export function Markdown({ content }: { content: string }) {
+// 流式对话期间父组件高频重渲染：content 不变时跳过重解析与重建节点。
+export const Markdown = memo(function Markdown({ content }: { content: string }) {
   if (!content) return null;
 
   const lines = content.split("\n");
@@ -204,4 +205,4 @@ export function Markdown({ content }: { content: string }) {
   }
 
   return <div className="space-y-1.5">{nodes}</div>;
-}
+});

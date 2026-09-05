@@ -17,24 +17,11 @@ async function getOrNull<T>(path: string): Promise<T | null> {
   }
 }
 
-const PLAN_CHANGE_POLL_DELAYS_MS = [1000, 2000, 4000] as const;
+/** draft 提案由后台异步定稿，轮询直到状态推进；间隔取「能接受的出现延迟」。 */
+const PLAN_CHANGE_POLL_INTERVAL_MS = 3000;
 
 async function getUnresolvedPlanChange(): Promise<PlanChange | null> {
   return getOrNull<PlanChange>("/api/v1/plan-changes/unresolved");
-}
-
-async function waitForPlanChangeSettlement(
-  initial: PlanChange | null,
-): Promise<PlanChange | null> {
-  let change = initial;
-  for (const delay of PLAN_CHANGE_POLL_DELAYS_MS) {
-    if (change === null || change.status !== "draft") return change;
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, delay);
-    });
-    change = await getUnresolvedPlanChange();
-  }
-  return change;
 }
 export interface TrainingData {
   goal: ActiveGoal | null;
@@ -87,13 +74,25 @@ export function useTrainingData(enabled: boolean): TrainingData {
     if (enabled) void load();
   }, [enabled, load]);
 
+  /** 提案仍是 draft 时慢速轮询：后台定稿完成后，「准备中」卡片自动换成待确认卡。 */
+  useEffect(() => {
+    if (pendingChange?.status !== "draft") return;
+    const timer = window.setInterval(() => {
+      void getUnresolvedPlanChange()
+        .then(setPendingChange)
+        .catch(() => {
+          // 单次轮询失败不提示，下一拍重试；持续性故障由整页 reload 的错误态呈现。
+        });
+    }, PLAN_CHANGE_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [pendingChange?.status]);
+
   const reloadAfterRun = useCallback(async () => {
     try {
-      const [stateData, initialChange] = await Promise.all([
+      const [stateData, pendingData] = await Promise.all([
         getOrNull<AthleteState>("/api/v1/athlete-state/latest"),
         getUnresolvedPlanChange(),
       ]);
-      const pendingData = await waitForPlanChangeSettlement(initialChange);
       setState(stateData);
       setPendingChange(pendingData);
     } catch {

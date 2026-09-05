@@ -8,7 +8,7 @@
  * 决定的提案卡。采纳后课表换新版本，版本号以盖章动效落下。
  */
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 import { apiPost } from "@/lib/api";
 import {
@@ -16,6 +16,7 @@ import {
   SESSION_LOAD,
   SESSION_NAME,
   formatDayMonth,
+  formatDateISO,
   formatPrescription,
   parseDate,
 } from "@/lib/format";
@@ -49,7 +50,7 @@ function buildWeek(plan: ActivePlan, pendingChange: PlanChange | null): DayCell[
   return Array.from({ length: 7 }, (_, index) => {
     const day = new Date(start);
     day.setDate(start.getDate() + index);
-    const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+    const date = formatDateISO(day);
     const session = sessionsByDate.get(date) ?? null;
     return {
       date,
@@ -226,7 +227,8 @@ function SessionDetailModal({
   );
 }
 
-export function WeekPlan({
+// 对话流式期间父组件高频重渲染：props 不变时跳过整块课表的重算与重绘。
+export const WeekPlan = memo(function WeekPlan({
   plan,
   pendingChange,
   onDecided,
@@ -394,4 +396,4 @@ export function WeekPlan({
       )}
     </section>
   );
-}
+});
