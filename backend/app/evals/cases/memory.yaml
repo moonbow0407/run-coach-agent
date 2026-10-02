@@ -1,0 +1,81 @@
+# Memory Suite：5 个 Case（Retrieval ×2 / Lifecycle ×2 / Context Injection ×1）。
+cases:
+  - schema_version: phase6.v1
+    id: memory_semantic_recall_001
+    suite: memory
+    execution: memory_retrieval
+    fixture: semantic_memory_distractors
+    tags: [memory, semantic, recall]
+    query: "我平时只有晚上有空，帮我看看这周怎么安排训练。"
+    as_of: "2026-08-28T08:00:00Z"
+    semantic_limit: 8
+    episode_limit: 4
+    expectation:
+      semantic_required:
+        - weekday_evening_availability
+      # forbidden 只保留与时间安排明确无关的记忆：
+      # 训练话题类干扰（晨跑/心率）在真实 embedding 下与排程查询相似度并不低，
+      # 强行禁止会把"相关性排序质量"误当成"召回失败"。
+      semantic_forbidden:
+        - communication_brief
+
+  - schema_version: phase6.v1
+    id: memory_episode_recall_001
+    suite: memory
+    execution: memory_retrieval
+    fixture: fatigue_episode_history
+    tags: [memory, episodic, recall]
+    query: "上次我出现疲劳积累的时候，后来是怎么恢复的？"
+    as_of: "2026-08-28T08:00:00Z"
+    semantic_limit: 8
+    episode_limit: 4
+    expectation:
+      episodic_required:
+        - fatigue_recovery_august
+
+  - schema_version: phase6.v1
+    id: memory_conflict_schedule_001
+    suite: memory
+    execution: memory_lifecycle
+    fixture: schedule_preference_correction
+    tags: [memory, lifecycle, conflict]
+    turns:
+      - input: "我长期更喜欢晚上训练。"
+        timestamp: "2026-08-26T10:00:00Z"
+      - input: "不对，我最近改成早上训练了，以后都喜欢早上训练。"
+        timestamp: "2026-08-27T10:00:00Z"
+    retrieval_query: "帮我安排这周的训练时间。"
+    retrieval_as_of: "2026-08-28T10:00:00Z"
+    expectation:
+      old_alias: schedule_evening
+      new_alias: schedule_morning
+
+  - schema_version: phase6.v1
+    id: memory_conflict_frequency_001
+    suite: memory
+    execution: memory_lifecycle
+    fixture: training_frequency_correction
+    tags: [memory, lifecycle, conflict]
+    turns:
+      - input: "这个阶段我每周最多训练 3 次，别给我排太多。"
+        timestamp: "2026-08-26T10:00:00Z"
+      - input: "我现在时间充裕，每周可以训练 5 次，请按这个来。"
+        timestamp: "2026-08-27T10:00:00Z"
+    retrieval_query: "按我的情况帮我安排这周训练。"
+    retrieval_as_of: "2026-08-28T10:00:00Z"
+    expectation:
+      old_alias: frequency_three
+      new_alias: frequency_five
+
+  - schema_version: phase6.v1
+    id: memory_context_injection_001
+    suite: memory
+    execution: context_injection
+    fixture: semantic_memory_distractors
+    tags: [memory, context, injection]
+    turns:
+      - input: "帮我安排这周训练，注意我平时只有晚上有空。"
+        timestamp: "2026-08-28T10:00:00Z"
+    expectation:
+      semantic_required:
+        - weekday_evening_availability

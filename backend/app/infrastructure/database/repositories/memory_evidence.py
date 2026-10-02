@@ -1,0 +1,277 @@
+"""Approved durable Evidence source 的 user-scoped 读取与状态校验。"""
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.agent.models.turn import TurnStatus
+from app.coaching.domain.plan.models import PlanChangeStatus
+from app.common.errors import NotFoundError
+from app.infrastructure.database.models.agent import MessageRow, TurnRow
+from app.infrastructure.database.models.coaching import (
+    AthleteStateSnapshotRow,
+    PlanChangeRow,
+    WorkoutFeedbackRow,
+    WorkoutRow,
+)
+from app.infrastructure.database.models.memory import EpisodeRow
+from app.infrastructure.database.session import short_session
+from app.memory.domain.episode import EpisodeStatus
+from app.memory.domain.evidence import EvidenceIndependenceRole, EvidenceSourceType
+from app.memory.ports.evidence_reader import ValidatedEvidence
+
+
+class SqlAlchemyEvidenceReader:
+    """证据读取器：把各类业务记录校验并转成正式证据引用（EvidenceRef）。"""
+
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def read_many(
+        self,
+        *,
+        user_id: UUID,
+        source_ids: tuple[tuple[EvidenceSourceType, UUID], ...],
+    ) -> tuple[ValidatedEvidence, ...]:
+        """按显式来源列表逐个读取并校验证据。"""
+        async with short_session(self._sessions) as session:
+            result = [
+                await self._read_one(
+                    session,
+                    user_id=user_id,
+                    source_type=source_type,
+                    source_id=source_id,
+                )
+                for source_type, source_id in source_ids
+            ]
+        return tuple(result)
+
+    async def read_window(
+        self,
+        *,
+        user_id: UUID,
+        started_at: datetime,
+        ended_at: datetime,
+        source_types: tuple[EvidenceSourceType, ...],
+    ) -> tuple[ValidatedEvidence, ...]:
+        """扫描时间窗口内请求的各类来源，汇总为按发生时间排序的证据。"""
+        if started_at.tzinfo is None or ended_at.tzinfo is None or ended_at < started_at:
+            raise ValueError("invalid_evidence_window")  # 时间窗口非法
+        requested = set(source_types)
+        identities: list[tuple[EvidenceSourceType, UUID]] = []
+        async with short_session(self._sessions) as session:
+            if EvidenceSourceType.WORKOUT in requested:  # 收集窗口内的训练
+                ids = await session.scalars(
+                    select(WorkoutRow.id).where(
+                        WorkoutRow.user_id == user_id,
+                        WorkoutRow.started_at >= started_at,
+                        WorkoutRow.started_at <= ended_at,
+                    )
+                )
+                identities.extend((EvidenceSourceType.WORKOUT, item) for item in ids)
+            if EvidenceSourceType.WORKOUT_FEEDBACK in requested:
+                ids = await session.scalars(
+                    select(WorkoutFeedbackRow.id).where(
+                        WorkoutFeedbackRow.user_id == user_id,
+                        WorkoutFeedbackRow.created_at >= started_at,
+                        WorkoutFeedbackRow.created_at <= ended_at,
+                    )
+                )
+                identities.extend((EvidenceSourceType.WORKOUT_FEEDBACK, item) for item in ids)
+            if EvidenceSourceType.ATHLETE_STATE_SNAPSHOT in requested:
+                ids = await session.scalars(
+                    select(AthleteStateSnapshotRow.id).where(
+                        AthleteStateSnapshotRow.user_id == user_id,
+                        AthleteStateSnapshotRow.as_of >= started_at,
+                        AthleteStateSnapshotRow.as_of <= ended_at,
+                    )
+                )
+                identities.extend(
+                    (EvidenceSourceType.ATHLETE_STATE_SNAPSHOT, item) for item in ids
+                )
+            if EvidenceSourceType.PLAN_CHANGE in requested:
+                # 计划调整只认已确认（confirmed）的，且按确认时间落窗
+                ids = await session.scalars(
+                    select(PlanChangeRow.id).where(
+                        PlanChangeRow.user_id == user_id,
+                        PlanChangeRow.status == PlanChangeStatus.CONFIRMED.value,
+                        PlanChangeRow.resolved_at >= started_at,
+                        PlanChangeRow.resolved_at <= ended_at,
+                    )
+                )
+                identities.extend((EvidenceSourceType.PLAN_CHANGE, item) for item in ids)
+            evidence = [
+                await self._read_one(
+                    session,
+                    user_id=user_id,
+                    source_type=source_type,
+                    source_id=source_id,
+                )
+                for source_type, source_id in identities
+            ]
+        return tuple(
+            sorted(
+                evidence,
+                key=lambda item: (
+                    item.source_occurred_at,
+                    item.source_type.value,
+                    str(item.source_id),
+                ),
+            )
+        )
+
+    async def _read_one(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+        source_type: EvidenceSourceType,
+        source_id: UUID,
+    ) -> ValidatedEvidence:
+        """读取单个来源并校验归属/状态，返回带独立性角色与负载的证据。"""
+        if source_type is EvidenceSourceType.MESSAGE:
+            row = await session.scalar(  # 消息须属于本用户已提交的 Turn
+                select(MessageRow)
+                .join(TurnRow, TurnRow.id == MessageRow.turn_id)
+                .where(
+                    MessageRow.id == source_id,
+                    TurnRow.user_id == user_id,
+                    TurnRow.status == TurnStatus.COMMITTED.value,
+                )
+            )
+            if row is not None:
+                return ValidatedEvidence(
+                    source_type,
+                    row.id,
+                    row.created_at,
+                    row.created_at.isoformat(),
+                    f"conversation:turn:{row.turn_id}",
+                    # 用户消息是独立证据；助手消息由系统生成，只算派生上下文
+                    EvidenceIndependenceRole.PRIMARY
+                    if row.role == "user"
+                    else EvidenceIndependenceRole.DERIVED_CONTEXT,
+                    {},
+                )
+        elif source_type is EvidenceSourceType.TURN:
+            row = await session.scalar(  # 整轮对话属于系统产物，只算派生上下文
+                select(TurnRow).where(
+                    TurnRow.id == source_id,
+                    TurnRow.user_id == user_id,
+                    TurnRow.status == TurnStatus.COMMITTED.value,
+                )
+            )
+            if row is not None and row.committed_at is not None:
+                return ValidatedEvidence(
+                    source_type,
+                    row.id,
+                    row.committed_at,
+                    row.committed_at.isoformat(),
+                    f"conversation:turn:{row.id}",
+                    EvidenceIndependenceRole.DERIVED_CONTEXT,
+                    {},
+                )
+        elif source_type is EvidenceSourceType.WORKOUT:
+            row = await session.scalar(
+                select(WorkoutRow).where(WorkoutRow.id == source_id, WorkoutRow.user_id == user_id)
+            )
+            if row is not None:
+                return ValidatedEvidence(
+                    source_type,
+                    row.id,
+                    row.started_at,
+                    row.updated_at.isoformat(),
+                    f"training:workout:{row.id}",
+                    EvidenceIndependenceRole.PRIMARY,
+                    {
+                        "workout_type": row.workout_type,
+                        "distance_m": row.distance_m,
+                        "duration_s": row.duration_s,
+                    },
+                )
+        elif source_type is EvidenceSourceType.WORKOUT_FEEDBACK:
+            row = await session.scalar(
+                select(WorkoutFeedbackRow).where(
+                    WorkoutFeedbackRow.id == source_id,
+                    WorkoutFeedbackRow.user_id == user_id,
+                )
+            )
+            if row is not None:
+                return ValidatedEvidence(
+                    source_type,
+                    row.id,
+                    row.created_at,
+                    row.updated_at.isoformat(),
+                    f"training:workout:{row.workout_id}",
+                    EvidenceIndependenceRole.PRIMARY,
+                    {
+                        "subjective_fatigue": row.subjective_fatigue,
+                        "perceived_exertion": row.perceived_exertion,
+                        "soreness": row.soreness,
+                    },
+                )
+        elif source_type is EvidenceSourceType.ATHLETE_STATE_SNAPSHOT:
+            row = await session.scalar(  # 状态快照是系统推导结果，属派生上下文
+                select(AthleteStateSnapshotRow).where(
+                    AthleteStateSnapshotRow.id == source_id,
+                    AthleteStateSnapshotRow.user_id == user_id,
+                )
+            )
+            if row is not None:
+                return ValidatedEvidence(
+                    source_type,
+                    row.id,
+                    row.as_of,
+                    f"{row.version}:{row.algorithm_version}:{row.created_at.isoformat()}",
+                    f"state:snapshot:{row.id}",
+                    EvidenceIndependenceRole.DERIVED_CONTEXT,
+                    {
+                        "snapshot_version": row.version,
+                        "fatigue_level": row.fatigue_level,
+                        "recovery_level": row.recovery_level,
+                        "confidence": row.confidence,
+                    },
+                )
+        elif source_type is EvidenceSourceType.PLAN_CHANGE:
+            row = await session.scalar(
+                select(PlanChangeRow).where(
+                    PlanChangeRow.id == source_id,
+                    PlanChangeRow.user_id == user_id,
+                    PlanChangeRow.status == PlanChangeStatus.CONFIRMED.value,
+                )
+            )
+            if row is not None and row.resolved_at is not None:
+                return ValidatedEvidence(
+                    source_type,
+                    row.id,
+                    row.resolved_at,
+                    row.resolved_at.isoformat(),
+                    f"plan_change:{row.id}",
+                    EvidenceIndependenceRole.PRIMARY,
+                    {
+                        "change_type": row.change_type,
+                        "reason": row.reason,
+                        "based_on_state_id": str(row.based_on_state_id),
+                    },
+                )
+        elif source_type is EvidenceSourceType.EPISODE:
+            row = await session.scalar(  # 情节须已完成才能作为证据
+                select(EpisodeRow).where(
+                    EpisodeRow.id == source_id,
+                    EpisodeRow.user_id == user_id,
+                    EpisodeRow.status == EpisodeStatus.COMPLETED.value,
+                )
+            )
+            if row is not None and row.completed_at is not None:
+                return ValidatedEvidence(
+                    source_type,
+                    row.id,
+                    row.ended_at,
+                    row.completed_at.isoformat(),
+                    f"episode:{row.id}",
+                    EvidenceIndependenceRole.PRIMARY,
+                    {"type": row.type, "summary": row.summary},
+                )
+        # 任一来源不存在、不归属本用户或状态不满足要求，都按未找到处理
+        raise NotFoundError("memory_evidence_source_not_found")

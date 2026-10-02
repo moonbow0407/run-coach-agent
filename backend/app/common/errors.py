@@ -1,0 +1,67 @@
+"""应用异常体系。
+
+RunCoachError 是根类型：API 边界只认识这一族错误；
+各层按语义抛出子类，基础设施异常在边界处归一化，不上抛内部细节。
+"""
+
+
+class RunCoachError(Exception):
+    """应用异常根类型。边界处只向上暴露这一族错误，不泄漏基础设施细节。"""
+
+
+class DomainError(RunCoachError):
+    """违反领域不变量，例如量表越界或非法状态。"""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        # 未单独给 code 时，message 本身就是稳定的领域错误名。
+        self.code = code if code is not None else message
+
+
+class ApplicationError(RunCoachError):
+    """应用层可预期失败，例如资源不存在或请求不合法。"""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        # 错误码用于 API 边界映射响应；未显式指定时复用 message 作稳定错误名。
+        self.code = code if code is not None else message
+
+
+class NotFoundError(ApplicationError):
+    """请求的资源不存在。"""
+
+
+class ConflictError(ApplicationError):
+    """资源冲突，例如未解决提案已存在或确认时状态已过期。"""
+
+
+class ForbiddenError(ApplicationError):
+    """身份已认证，但无权访问该资源。"""
+
+
+class AuthenticationError(ApplicationError):
+    """未通过认证或凭证无效。"""
+
+
+class AgentRuntimeError(RunCoachError):
+    """AgentRuntime 执行失败。ChatService 据此将 Turn 置为 failed。"""
+
+
+class TurnCancelled(AgentRuntimeError):
+    """当前 AgentRun 被取消。ChatService 据此将 Turn 置为 cancelled，而不是 failed。"""
+
+
+class ReasonerError(RunCoachError):
+    """Reasoner 无法产出合法 Action。"""
+
+
+class ToolRuntimeError(RunCoachError):
+    """Tool Runtime 不变量破坏（Registry 状态损坏、ToolSession 与 AgentRun 不一致、无法建立可信上下文等）。
+
+    与五种可恢复的 Tool 错误 Observation（tool_not_found 等）不同：
+    本异常使 AgentRun failed，绝不伪装成 Tool 执行结果。
+    """
+
+
+class InfrastructureError(RunCoachError):
+    """数据库、LLM 供应商等基础设施失败，归一化后再向上传播。"""

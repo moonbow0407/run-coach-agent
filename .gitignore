@@ -1,0 +1,35 @@
+# 本地环境与敏感配置
+.env
+.env.*
+!.env.example
+docker-compose.override.yml
+.venv/
+
+# Python 生成文件
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# 前端依赖与构建产物
+node_modules/
+.next/
+*.tsbuildinfo
+
+# 操作系统与编辑器临时文件
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.zcode/
+.workbuddy/
+
+# Eval 运行产物（JSON artifact 与 baseline）
+.eval-results/
