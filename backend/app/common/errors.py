@@ -64,4 +64,9 @@ class ToolRuntimeError(RunCoachError):
 
 
 class InfrastructureError(RunCoachError):
-    """数据库、LLM 供应商等基础设施失败，归一化后再向上传播。"""
+    """基础设施失败；只有适配层明确识别的临时故障允许重试。"""
+
+    def __init__(self, code: str, *, retryable: bool = False) -> None:
+        super().__init__(code)
+        self.code = code
+        self.retryable = retryable

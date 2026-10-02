@@ -7,6 +7,7 @@ from openai import APIError, AsyncOpenAI
 
 from app.agent.models.message import Message
 from app.common.errors import InfrastructureError
+from app.infrastructure.llm.openai_errors import normalize_openai_error
 from app.memory.domain.episode import EpisodeCandidate, EpisodeType
 from app.memory.domain.semantic import MemoryOrigin, SemanticMemoryType
 from app.memory.ports.evidence_reader import ValidatedEvidence
@@ -62,7 +63,7 @@ class OpenAISemanticMemoryExtractor:
                 },
             )
         except APIError as exc:
-            raise InfrastructureError("memory_extraction_failed") from exc
+            raise normalize_openai_error(exc, code="memory_extraction_failed") from exc
         message = response.choices[0].message if response.choices else None
         if message is None or not message.content:  # 模型返回空内容：协议失败
             raise InfrastructureError("memory_extraction_empty_response")

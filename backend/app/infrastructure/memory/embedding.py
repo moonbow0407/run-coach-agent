@@ -6,6 +6,7 @@
 from openai import APIError, AsyncOpenAI
 
 from app.common.errors import InfrastructureError
+from app.infrastructure.llm.openai_errors import normalize_openai_error
 from app.memory.ports.embedding import EmbeddingBatch
 
 
@@ -36,7 +37,7 @@ class OpenAIEmbeddingProvider:
                 dimensions=self._dimensions,
             )
         except APIError as exc:
-            raise InfrastructureError("memory_embedding_failed") from exc
+            raise normalize_openai_error(exc, code="memory_embedding_failed") from exc
         ordered = sorted(response.data, key=lambda item: item.index)  # 按 index 还原输入顺序
         vectors = tuple(tuple(float(value) for value in item.embedding) for item in ordered)
         if len(vectors) != len(texts) or any(len(vector) != self._dimensions for vector in vectors):

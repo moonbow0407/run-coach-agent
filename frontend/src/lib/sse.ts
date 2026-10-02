@@ -28,97 +28,73 @@ export type StreamEvent =
   | { type: "run.failed"; error: string }
   | { type: "run.cancelled" };
 
-interface WireFrame {
-  turn_id?: string;
-  thread_id?: string;
-  run_id?: string;
-  tool?: string;
-  call_id?: string;
-  status?: string;
-  duration_ms?: number;
-  content?: string;
-  step_index?: number;
-  message_id?: string;
-  error?: string;
+function protocolError(): Error {
+  return new Error("教练响应格式错误，本轮结果未知，请刷新历史确认");
 }
 
-function translate(event: string, data: WireFrame): StreamEvent | null {
+function translate(event: string, raw: unknown): StreamEvent {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw protocolError();
+  const data = raw as Record<string, unknown>;
+  const text = (key: string): string => {
+    const value = data[key];
+    if (typeof value !== "string" || !value) throw protocolError();
+    return value;
+  };
   switch (event) {
     case "run.started":
-      return data.thread_id
-        ? { type: "run.started", turnId: data.turn_id ?? "", threadId: data.thread_id }
-        : null;
+      return { type: event, turnId: text("turn_id"), threadId: text("thread_id") };
     case "reasoning.started":
-      return { type: "reasoning.started" };
+      return { type: event };
     case "tool.started":
-      return data.tool && data.call_id
-        ? {
-            type: "tool.started",
-            trace: {
-              callId: data.call_id,
-              tool: data.tool,
-              status: null,
-              durationMs: null,
-              done: false,
-            },
-          }
-        : null;
-    case "tool.completed":
-      return data.tool && data.call_id
-        ? {
-            type: "tool.completed",
-            trace: {
-              callId: data.call_id,
-              tool: data.tool,
-              status: data.status ?? null,
-              durationMs: data.duration_ms ?? null,
-              done: true,
-            },
-          }
-        : null;
-    case "response.delta":
-      return {
-        type: "response.delta",
-        content: data.content ?? "",
-        stepIndex: data.step_index ?? 0,
-      };
-    case "run.completed":
-      return { type: "run.completed" };
-    case "run.failed":
-      return { type: "run.failed", error: data.error ?? "执行失败" };
-    case "run.cancelled":
-      return { type: "run.cancelled" };
-    default:
-      return null;
-  }
-}
-
-function parseChunk(buffer: string): { events: Array<{ event: string; data: WireFrame }>; rest: string } {
-  const events: Array<{ event: string; data: WireFrame }> = [];
-  let rest = buffer;
-  let separator = rest.indexOf("\n\n");
-  while (separator !== -1) {
-    const frame = rest.slice(0, separator);
-    rest = rest.slice(separator + 2);
-    let event = "message";
-    const dataLines: string[] = [];
-    for (const line of frame.split("\n")) {
-      if (line.startsWith("event:")) event = line.slice(6).trim();
-      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
-    }
-    if (dataLines.length > 0) {
-      try {
-        events.push({ event, data: JSON.parse(dataLines.join("\n")) as WireFrame });
-      } catch {
-        // 单帧解析失败只跳过该帧，不中断整个流。
+      return { type: event, trace: {
+        callId: text("call_id"), tool: text("tool"), status: null, durationMs: null, done: false,
+      } };
+    case "tool.completed": {
+      const duration = data.duration_ms;
+      if (typeof duration !== "number" || !Number.isFinite(duration) || duration < 0) {
+        throw protocolError();
       }
+      return { type: event, trace: {
+        callId: text("call_id"), tool: text("tool"), status: text("status"),
+        durationMs: duration, done: true,
+      } };
     }
-    separator = rest.indexOf("\n\n");
+    case "response.delta":
+      if (typeof data.content !== "string" || typeof data.step_index !== "number"
+          || !Number.isInteger(data.step_index) || data.step_index < 0) throw protocolError();
+      return { type: event, content: data.content, stepIndex: data.step_index };
+    case "run.completed":
+    case "run.cancelled":
+      return { type: event };
+    case "run.failed":
+      return { type: event, error: text("error") };
+    default:
+      throw protocolError();
   }
-  return { events, rest };
 }
 
-/** 发送消息并逐事件回调。resolve 于流正常结束；支持通过 AbortSignal 中断。 */
+function parseFrame(frame: string): StreamEvent | null {
+  let event = "message";
+  const data: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+  }
+  // 注释心跳没有数据，不属于业务事件。
+  if (!data.length) {
+    if (event !== "message") throw protocolError();
+    return null;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data.join("\n"));
+  } catch {
+    throw protocolError();
+  }
+  return translate(event, payload);
+}
+
+/** 发送消息并逐事件回调。resolve 于收到明确终态；支持通过 AbortSignal 中断。 */
 export async function streamChat(
   message: string,
   threadId: string | null,
@@ -156,15 +132,35 @@ export async function streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const { events, rest } = parseChunk(buffer);
-    buffer = rest;
-    for (const frame of events) {
-      const translated = translate(frame.event, frame.data);
-      if (translated) onEvent(translated);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("教练连接提前结束，本轮结果未知，请刷新历史确认");
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      let separator: number;
+      while ((separator = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        const event = parseFrame(frame);
+        if (!event) continue;
+        onEvent(event);
+        if (["run.completed", "run.failed", "run.cancelled"].includes(event.type)) return;
+      }
     }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    throw new Error(
+      error instanceof Error && error.message.includes("本轮结果未知")
+        ? error.message : "教练连接中断，本轮结果未知，请刷新历史确认",
+      { cause: error },
+    );
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // 已断开的流可能无法取消；清理失败不得覆盖原始结果。
+    }
+    reader.releaseLock();
   }
 }

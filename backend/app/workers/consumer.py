@@ -208,14 +208,6 @@ class ConsumerRunner:
         )
 
 
-# 这些基础设施错误源于配置 / 契约缺失，重试不会好转，按永久失败处理。
-_PERMANENT_INFRASTRUCTURE_CODES = {
-    "memory_embedding_provider_not_configured",
-    "memory_extractor_not_configured",
-    "memory_embedding_contract_mismatch",
-    "memory_embedding_dimension_mismatch",
-}
-
 # 约束冲突 / 数据格式类数据库错误：重试无意义，按永久失败处理。
 _PERMANENT_DATABASE_ERRORS = (IntegrityError, DataError, ProgrammingError)
 
@@ -235,7 +227,5 @@ def _classify(exc: Exception) -> tuple[str, bool]:
     if isinstance(exc, (DBAPIError, SqlAlchemyTimeoutError)):
         return "database_temporarily_unavailable", True
     if isinstance(exc, InfrastructureError):
-        # 基础设施错误：已知永久码之外默认可重试（如外部服务抖动）。
-        code = getattr(exc, "code", str(exc))
-        return str(code), str(code) not in _PERMANENT_INFRASTRUCTURE_CODES
+        return exc.code, exc.retryable
     return "worker_internal_error", False

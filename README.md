@@ -4,42 +4,16 @@
 
 ## 当前状态
 
-- Phase 1 — Foundation & Agent Core：已实现
-- Phase 2 — Dynamic Tool Runtime：已实现
-- Phase 3 — Coaching Intelligence：已实现
-- Phase 4 — Long-term Memory：已实现
-- Phase 5 — Continuous State and Workers：已实现
-
-当前后端回归基线为 `216 passed`（含真实本地 PostgreSQL/Redis 集成测试）。Phase 4/5 的实现说明分别见 [`docs/PHASE_4_IMPLEMENTATION.md`](docs/PHASE_4_IMPLEMENTATION.md) 与 [`docs/PHASE_5_IMPLEMENTATION.md`](docs/PHASE_5_IMPLEMENTATION.md)。
+当前处于项目回顾阶段。2026-10-02 错误处理修复后验证：177 项后端单元测试、11 项前端 SSE 回归测试、Ruff、前端类型检查及生产构建通过。数据库集成和真实模型链路尚未重新验证。
 
 ## 已实现能力
 
 - Agent Core：可信用户身份、Conversation 双事务、Reason–Act–Observe 循环、生命周期事件与执行轨迹。
 - Dynamic Tool Runtime：Registry、Search、Resolver、Run-local Discovery、统一授权与错误归一化，以及原生 tool calling。
 - Coaching Intelligence：训练负荷分析、Athlete State 快照、受约束的计划调整提案，以及确认后生成新计划版本。
-- Long-term Memory：Semantic Memory、Episode、Evidence、幂等 Projection、双时间检索、确定性重排和 Context 硬预算。
+- Long-term Memory：Semantic Memory、Episode、Evidence、幂等 Projection、双时间检索、确定性重排和记忆条数/字符预算。
 - Continuous Workers：Transactional Outbox、ARQ/Redis durable tasks、消费 receipt、有限重试/死信、恢复扫描，以及持续 Athlete State / Memory / Episode 投影。
 - 训练工作台：目标、状态、周计划、计划调整确认、最近训练与 SSE 对话界面。
-
-## 架构
-
-仓库采用模块化单体：
-
-```text
-backend/app/
-├── agent/           # Agent Runtime、Context、Reasoner 与 Conversation
-├── coaching/        # Workout、Goal、Plan、Athlete State 与训练分析
-├── memory/          # Semantic Memory、Episode、Evidence、Projection 与 Retrieval
-├── tools/           # Tool Registry、Discovery、Resolver 与 Executor
-├── identity/        # 用户身份与请求上下文
-├── workers/         # Publisher、Consumer、task handlers、retry 与 recovery
-└── infrastructure/  # PostgreSQL、Redis/ARQ、pgvector、LLM、认证与应用装配
-
-frontend/            # Next.js 训练工作台
-docs/                # 顶层架构、Phase Contract 与实现说明
-```
-
-Canonical Fact、Derived State 与 Memory 的边界以 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 为准。Memory 只保存带正式 Evidence 的派生认知，不复制 Coaching 模块拥有的事实。
 
 ## 环境要求
 
@@ -135,20 +109,12 @@ uv run pytest -q
 
 ```powershell
 cd frontend
+npm test
 npm run typecheck
 npm run build
 ```
 
 测试中的 Agent 场景使用 `ScriptedReasoner` 或 Fake Provider，不调用真实模型。
-
-## 文档
-
-- [顶层架构](docs/ARCHITECTURE.md)
-- [Phase 1 — Foundation & Agent Core](docs/phases/PHASE_1_FOUNDATION_AGENT_CORE.md)
-- [Phase 2 — Dynamic Tool Runtime](docs/phases/PHASE_2_DYNAMIC_TOOL_RUNTIME.md)
-- [Phase 3 — Coaching Intelligence](docs/phases/PHASE_3_COACHING_INTELLIGENCE.md)
-- [Phase 4 — Long-term Memory](docs/phases/PHASE_4_LONG_TERM_MEMORY.md)
-- [Phase 5 — Continuous State and Workers](docs/phases/PHASE_5_CONTINUOUS_STATE_AND_WORKERS.md)
 
 ## 运维与当前限制
 
@@ -156,5 +122,4 @@ npm run build
 - 对 dead-letter task 的人工重放必须显式提供原始三元组：`uv run python scripts/replay_worker_task.py --event-id <uuid> --consumer-name <task> --consumer-version 1`；不会创建新 business event。
 
 - PostgreSQL 是 canonical facts、Memory、Outbox 与 consumer receipt 的 source of truth；Redis 仅保存 ARQ operational job state。
-- Redis 数据丢失或 Worker 长时间停机后，可运行 `uv run python scripts/recover_worker_tasks.py` 重新入队缺失 routes；该命令可重复执行。
 - 当前提供结构化日志与数据库审计状态，尚未实现 dashboard、分布式追踪后端和自动 Outbox 历史清理。

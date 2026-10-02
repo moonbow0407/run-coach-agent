@@ -25,7 +25,8 @@ from app.agent.reasoning.models import (
     UserMessage,
 )
 from app.agent.reasoning.reasoner import TextDeltaListener
-from app.common.errors import InfrastructureError, ReasonerError
+from app.common.errors import ReasonerError
+from app.infrastructure.llm.openai_errors import normalize_openai_error
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class OpenAICompatibleProvider:
             response = await self._client.chat.completions.create(**kwargs)
         except APIError as exc:
             logger.exception("llm.provider.call_failed", extra={"model": self._model})
-            raise InfrastructureError("LLM 调用失败") from exc  # SDK 异常归一为基础设施错误
+            raise normalize_openai_error(exc, code="LLM 调用失败") from exc  # SDK 异常归一为基础设施错误
 
         choice = response.choices[0] if response.choices else None
         message = choice.message if choice else None
@@ -159,7 +160,7 @@ class OpenAICompatibleProvider:
                             await on_text_delta(fragment)
         except APIError as exc:
             logger.exception("llm.provider.stream_failed", extra={"model": self._model})
-            raise InfrastructureError("LLM 调用失败") from exc
+            raise normalize_openai_error(exc, code="LLM 调用失败") from exc
 
         text = "".join(text_parts)
         tool_calls = _parse_tool_calls(

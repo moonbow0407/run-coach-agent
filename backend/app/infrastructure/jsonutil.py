@@ -2,10 +2,13 @@
 转为可写入 JSONB 或放进 Observation 的纯结构。
 """
 
+from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
+
+from pydantic import BaseModel
 
 
 def json_ready(value: Any) -> Any:
@@ -19,13 +22,15 @@ def json_ready(value: Any) -> Any:
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, Enum):
-        return value.value
+        return json_ready(value.value)
     if isinstance(value, dict):
-        return {str(key): json_ready(item) for key, item in value.items()}
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("JSON 对象的键必须是字符串")
+        return {key: json_ready(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [json_ready(item) for item in value]
-    if hasattr(value, "model_dump"):
+    if isinstance(value, BaseModel):
         return json_ready(value.model_dump())
-    if hasattr(value, "__dataclass_fields__"):
-        return json_ready(vars(value))
-    return str(value)  # 兜底：未知类型转字符串，保证序列化不中断
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: json_ready(getattr(value, field.name)) for field in fields(value)}
+    raise TypeError(f"不支持的 JSON 类型: {type(value).__name__}")
